@@ -23,6 +23,9 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, "../.env") });
 
 const router = express.Router();
+const MIN_PDF_TEXT_LENGTH = 50;
+const ML_SERVICE_PDF_URL =
+  process.env.ML_SERVICE_PDF_URL || "http://127.0.0.1:5001/extract-pdf-text";
 
 // Resume analysis routes (protected)
 router.post("/analyze", protect, analyzeManualResume);
@@ -111,6 +114,35 @@ async function callAI(prompt) {
   return getAssistantText(data);
 }
 
+async function extractPdfTextWithMlService(pdfBase64, fileName = "resume.pdf") {
+  const response = await fetch(ML_SERVICE_PDF_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      pdfBase64,
+      fileName,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error ||
+      data?.message ||
+      "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based."
+    );
+  }
+
+  return {
+    text: String(data?.text || "").trim(),
+    extractor: String(data?.extractor || "").trim(),
+    isImageBased: Boolean(data?.isImageBased),
+  };
+}
+
 function buildPdfContent(prompt, pdfBase64, fileName = "resume.pdf") {
   return [
     {
@@ -192,7 +224,7 @@ router.post("/parse-resume", async (req, res) => {
   try {
     const { pdfText = "", pdfBase64 = "", fileName = "resume.pdf" } = req.body;
 
-    if ((!pdfText || pdfText.trim().length < 50) && !pdfBase64) {
+    if ((!pdfText || pdfText.trim().length < MIN_PDF_TEXT_LENGTH) && !pdfBase64) {
       return res.status(400).json({
         error: "Resume PDF data is missing",
       });
@@ -201,20 +233,33 @@ router.post("/parse-resume", async (req, res) => {
     console.log("Starting deterministic resume parsing...");
 
     let textForParsing = String(pdfText || "").trim();
+    let extractionErrorMessage = "";
 
     if (pdfBase64) {
       try {
-        const { annotationText, assistantText } = await extractPdfTextWithFileParser(
+        const { text, extractor } = await extractPdfTextWithMlService(
           pdfBase64,
           fileName
         );
-        const ocrText = (annotationText || assistantText || "").trim();
-        if (ocrText.length > textForParsing.length) {
-          textForParsing = ocrText;
+
+        if (text.length > textForParsing.length) {
+          textForParsing = text;
         }
+        console.log(`PDF text extracted via ${extractor || "ml_service"} with ${text.length} characters`);
       } catch (ocrError) {
-        console.error("PDF OCR text extraction failed during parse step:", ocrError.message);
+        extractionErrorMessage =
+          ocrError.message ||
+          "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.";
+        console.error("PDF text extraction failed during parse step:", extractionErrorMessage);
       }
+    }
+
+    if (textForParsing.length < MIN_PDF_TEXT_LENGTH) {
+      return res.status(400).json({
+        error:
+          extractionErrorMessage ||
+          "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.",
+      });
     }
 
     const finalHeuristics = extractResumeDataHeuristically(textForParsing);
@@ -225,8 +270,18 @@ router.post("/parse-resume", async (req, res) => {
   } catch (error) {
     console.error("Resume Parse Error:", error);
     const { pdfText = "" } = req.body;
-    const heuristicOnly = extractResumeDataHeuristically(pdfText);
-    res.json(normalizeParsedResumeData({}, heuristicOnly, pdfText));
+    const fallbackText = String(pdfText || "").trim();
+
+    if (fallbackText.length >= MIN_PDF_TEXT_LENGTH) {
+      const heuristicOnly = extractResumeDataHeuristically(fallbackText);
+      return res.json(normalizeParsedResumeData({}, heuristicOnly, fallbackText));
+    }
+
+    res.status(500).json({
+      error:
+        error.message ||
+        "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.",
+    });
   }
 });
 
@@ -241,21 +296,36 @@ router.post("/extract-pdf-text", protect, async (req, res) => {
 
     console.log("Extracting text from PDF using file parsing...");
 
-    const { annotationText, assistantText } = await extractPdfTextWithFileParser(
+    const { text, extractor, isImageBased } = await extractPdfTextWithMlService(
       pdfBase64,
       fileName
     );
-    const extractedText = annotationText || assistantText;
+    const extractedText = String(text || "").trim();
 
-    if (!extractedText || extractedText.trim().length < 50) {
-      return res.status(400).json({ error: "Could not extract text from PDF" });
+    if (!extractedText || extractedText.length < MIN_PDF_TEXT_LENGTH) {
+      return res.status(400).json({
+        error: "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.",
+      });
     }
 
-    console.log(`AI extracted ${extractedText.length} characters from PDF`);
-    res.json({ text: extractedText });
+    console.log(`PDF text extracted via ${extractor || "ml_service"} with ${extractedText.length} characters`);
+    res.json({
+      text: extractedText,
+      extractor,
+      isImageBased,
+    });
   } catch (error) {
     console.error("PDF text extraction error:", error);
-    res.status(500).json({ error: error.message });
+    const statusCode =
+      error.message?.includes("image-based") ||
+      error.message?.includes("text-based PDF") ||
+      error.message?.includes("Could not extract text from PDF") ||
+      error.message?.includes("No PDF provided") ||
+      error.message?.includes("10MB")
+        ? 400
+        : 500;
+
+    res.status(statusCode).json({ error: error.message });
   }
 });
 

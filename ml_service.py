@@ -11,9 +11,11 @@ The manual resume analysis route in the Node backend calls this ML API.
 
 from __future__ import annotations
 
+import base64
 from flask import Flask, request, jsonify
 import atexit
 import csv
+import io
 import os
 import pickle
 import re
@@ -35,6 +37,21 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
+
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    PdfReader = None
+
+try:
+    from pdfminer.high_level import extract_text as pdfminer_extract_text
+except ImportError:
+    pdfminer_extract_text = None
 
 try:
     from pymongo import MongoClient
@@ -100,6 +117,15 @@ TARGET_FIELD_ALIASES = [
 ]
 
 app = Flask(__name__)
+MAX_PDF_UPLOAD_BYTES = 10 * 1024 * 1024
+MIN_PDF_TEXT_LENGTH = 50
+GENERIC_PDF_EXTRACTION_ERROR = (
+    "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based."
+)
+IMAGE_BASED_PDF_ERROR = (
+    "Your PDF appears to be image-based. Please upload a text-based PDF."
+)
+app.config["MAX_CONTENT_LENGTH"] = MAX_PDF_UPLOAD_BYTES
 managed_processes: List[subprocess.Popen] = []
 model_lock = threading.Lock()
 retrain_state_lock = threading.Lock()
@@ -112,6 +138,130 @@ training_logs_collection = None
 role_classifier_model = None
 role_classifier_accuracy = 0.0
 role_classifier_name = ""
+
+
+def normalize_extracted_pdf_text(text: Any) -> str:
+    normalized = str(text or "").replace("\x00", "")
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
+
+
+def decode_pdf_base64(pdf_base64: str) -> bytes:
+    raw_value = str(pdf_base64 or "").strip()
+    if not raw_value:
+        raise ValueError("No PDF provided")
+
+    if "," in raw_value and raw_value.lower().startswith("data:application/pdf;base64,"):
+        raw_value = raw_value.split(",", 1)[1]
+
+    try:
+        return base64.b64decode(raw_value, validate=True)
+    except Exception as exc:
+        raise ValueError("Invalid PDF data provided") from exc
+
+
+def extract_text_with_pdfplumber(pdf_bytes: bytes) -> str:
+    if pdfplumber is None:
+        raise RuntimeError("pdfplumber is not installed")
+
+    pages: List[str] = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            page_text = normalize_extracted_pdf_text(page.extract_text() or "")
+            if page_text:
+                pages.append(page_text)
+
+    return normalize_extracted_pdf_text("\n\n".join(pages))
+
+
+def extract_text_with_pypdf2(pdf_bytes: bytes) -> str:
+    if PdfReader is None:
+        raise RuntimeError("PyPDF2 is not installed")
+
+    pages: List[str] = []
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    for page in reader.pages:
+        page_text = normalize_extracted_pdf_text(page.extract_text() or "")
+        if page_text:
+            pages.append(page_text)
+
+    return normalize_extracted_pdf_text("\n\n".join(pages))
+
+
+def extract_text_with_pdfminer(pdf_bytes: bytes) -> str:
+    if pdfminer_extract_text is None:
+        raise RuntimeError("pdfminer.six is not installed")
+
+    extracted = pdfminer_extract_text(io.BytesIO(pdf_bytes))
+    return normalize_extracted_pdf_text(extracted)
+
+
+def detect_image_based_pdf(pdf_bytes: bytes) -> bool:
+    total_chars = 0
+    total_images = 0
+
+    if pdfplumber is not None:
+        try:
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                for page in pdf.pages:
+                    total_chars += len(page.chars or [])
+                    total_images += len(page.images or [])
+        except Exception:
+            pass
+
+    has_embedded_image_marker = b"/Image" in pdf_bytes or b"/Subtype /Image" in pdf_bytes
+
+    if total_chars == 0 and (total_images > 0 or has_embedded_image_marker):
+        return True
+
+    return total_chars < 10 and total_images > 0
+
+
+def extract_pdf_text_with_fallbacks(pdf_bytes: bytes) -> Dict[str, Any]:
+    extractors = [
+        ("pdfplumber", extract_text_with_pdfplumber),
+        ("PyPDF2", extract_text_with_pypdf2),
+        ("pdfminer", extract_text_with_pdfminer),
+    ]
+
+    attempts: List[Dict[str, Any]] = []
+    best_text = ""
+    best_extractor = ""
+
+    for extractor_name, extractor in extractors:
+        try:
+            extracted_text = normalize_extracted_pdf_text(extractor(pdf_bytes))
+            attempts.append({
+                "extractor": extractor_name,
+                "characters": len(extracted_text),
+            })
+
+            if len(extracted_text) > len(best_text):
+                best_text = extracted_text
+                best_extractor = extractor_name
+
+            if len(extracted_text) >= MIN_PDF_TEXT_LENGTH:
+                return {
+                    "text": extracted_text,
+                    "extractor": extractor_name,
+                    "attempts": attempts,
+                    "isImageBased": False,
+                }
+        except Exception as exc:
+            attempts.append({
+                "extractor": extractor_name,
+                "error": str(exc),
+            })
+
+    if detect_image_based_pdf(pdf_bytes):
+        raise ValueError(IMAGE_BASED_PDF_ERROR)
+
+    if best_text and len(best_text) < MIN_PDF_TEXT_LENGTH:
+        raise ValueError(GENERIC_PDF_EXTRACTION_ERROR)
+
+    raise ValueError(GENERIC_PDF_EXTRACTION_ERROR)
 
 
 def load_env_file() -> None:
@@ -1248,6 +1398,36 @@ def retrain_models_in_background() -> None:
             print(f"⚠️ Failed to re-check pending retraining inputs: {exc}")
 
 
+@app.route("/extract-pdf-text", methods=["POST"])
+def extract_pdf_text():
+    payload = request.get_json(silent=True) or {}
+    pdf_base64 = payload.get("pdfBase64", "")
+    file_name = str(payload.get("fileName", "resume.pdf") or "resume.pdf").strip() or "resume.pdf"
+
+    try:
+        pdf_bytes = decode_pdf_base64(pdf_base64)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if len(pdf_bytes) > MAX_PDF_UPLOAD_BYTES:
+        return jsonify({"error": "PDF size must be 10MB or less"}), 413
+
+    try:
+        result = extract_pdf_text_with_fallbacks(pdf_bytes)
+        return jsonify({
+            "text": result["text"],
+            "extractor": result["extractor"],
+            "characters": len(result["text"]),
+            "fileName": file_name,
+            "isImageBased": False,
+        })
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        print(f"PDF extraction endpoint error for {file_name}: {exc}")
+        return jsonify({"error": GENERIC_PDF_EXTRACTION_ERROR}), 500
+
+
 @app.route("/predict", methods=["POST"])
 def predict():
     payload = request.get_json(silent=True) or {}
@@ -1272,6 +1452,7 @@ def index():
         "endpoints": {
             "health": "http://127.0.0.1:5001/health",
             "predict": "POST http://127.0.0.1:5001/predict",
+            "extractPdfText": "POST http://127.0.0.1:5001/extract-pdf-text",
             "frontend": "http://127.0.0.1:5173",
             "backend": "http://127.0.0.1:5000/api/health",
         },
