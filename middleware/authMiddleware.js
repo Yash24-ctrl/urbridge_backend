@@ -1,48 +1,69 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 
-export const protect = async (req, res, next) => {
-  let token;
+const resolveUserFromToken = async (token) => {
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-  // Check for Bearer token in Authorization header
+  if (decoded.isGoogleUser) {
+    return {
+      _id: decoded.id,
+      username: decoded.name,
+      email: decoded.email,
+      avatar: decoded.picture,
+      isGoogleUser: true,
+    };
+  }
+
+  return User.findById(decoded.id).select('-password');
+};
+
+function getBearerToken(req) {
   if (
     req.headers.authorization &&
     req.headers.authorization.startsWith('Bearer')
   ) {
-    try {
-      token = req.headers.authorization.split(' ')[1];
-
-      // Verify token
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-      // Handle stateless Google users without DB lookup
-      if (decoded.isGoogleUser) {
-        req.user = {
-          _id: decoded.id,
-          username: decoded.name,
-          email: decoded.email,
-          avatar: decoded.picture,
-          isGoogleUser: true,
-        };
-        return next();
-      }
-
-      // Get user from token (exclude password)
-      req.user = await User.findById(decoded.id).select('-password');
-
-      if (!req.user) {
-        return res.status(401).json({ message: 'User not found' });
-      }
-
-      next();
-    } catch (error) {
-      console.error('Auth middleware error:', error.message);
-      return res.status(401).json({ message: 'Not authorized, token failed' });
-    }
+    return req.headers.authorization.split(' ')[1];
   }
+
+  return null;
+}
+
+export const protect = async (req, res, next) => {
+  const token = getBearerToken(req);
 
   if (!token) {
     return res.status(401).json({ message: 'Not authorized, no token' });
   }
+
+  try {
+    req.user = await resolveUserFromToken(token);
+
+    if (!req.user) {
+      return res.status(401).json({ message: 'User not found' });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error.message);
+    return res.status(401).json({ message: 'Not authorized, token failed' });
+  }
 };
+
+export const optionalProtect = async (req, res, next) => {
+  const token = getBearerToken(req);
+
+  if (!token) {
+    return next();
+  }
+
+  try {
+    req.user = await resolveUserFromToken(token);
+  } catch (error) {
+    console.error('Optional auth middleware error:', error.message);
+  }
+
+  next();
+};
+
+export const authMiddleware = protect;
 

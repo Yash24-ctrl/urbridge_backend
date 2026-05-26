@@ -1,8 +1,32 @@
+import fs from 'fs';
+import path from 'path';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 import User from '../models/User.js';
+import { isValidEmail, normalizeEmailValue } from '../utils/emailValidation.js';
 import { sendResetPasswordEmail } from '../utils/emailService.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function readFrontendGoogleClientId() {
+  try {
+    const envFile = fs.readFileSync(
+      path.resolve(__dirname, '../../.env'),
+      'utf8'
+    );
+    const match = envFile.match(/^\s*VITE_GOOGLE_CLIENT_ID\s*=\s*(.+)\s*$/m);
+    return match ? String(match[1]).trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+const GOOGLE_CLIENT_ID = String(
+  process.env.GOOGLE_CLIENT_ID || readFrontendGoogleClientId()
+).trim();
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -16,7 +40,7 @@ const generateGoogleToken = (payload) => {
   });
 };
 
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const client = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
 
 // @desc    Register new user
 // @route   POST /api/user/register
@@ -24,13 +48,18 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 export const register = async (req, res) => {
   try {
     const { username, email, password } = req.body;
+    const normalizedEmail = normalizeEmailValue(email);
 
-    if (!username || !email || !password) {
+    if (!username || !normalizedEmail || !password) {
       return res.status(400).json({ message: 'Please provide all required fields' });
     }
 
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({ message: 'Please provide a valid email address' });
+    }
+
     // Check if user exists
-    const userExists = await User.findOne({ email: email.toLowerCase() });
+    const userExists = await User.findOne({ email: normalizedEmail });
     if (userExists) {
       return res.status(409).json({ message: 'User already exists with this email' });
     }
@@ -38,7 +67,7 @@ export const register = async (req, res) => {
     // Create user
     const user = await User.create({
       username: username.trim(),
-      email: email.toLowerCase().trim(),
+      email: normalizedEmail,
       password,
     });
 
@@ -65,13 +94,18 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
+    const normalizedEmail = normalizeEmailValue(email);
 
-    if (!email || !password) {
+    if (!normalizedEmail || !password) {
       return res.status(400).json({ message: 'Please provide email and password' });
     }
 
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({ message: 'Please provide a valid email address' });
+    }
+
     // Find user by email (include password for comparison)
-    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
 
     if (!user) {
       return res.status(404).json({ message: 'You are not registered. Please register first.' });
@@ -110,17 +144,22 @@ export const googleLogin = async (req, res) => {
       return res.status(400).json({ message: 'Google credential is required' });
     }
 
+    if (!GOOGLE_CLIENT_ID) {
+      return res.status(500).json({ message: 'Google authentication is not configured' });
+    }
+
     // Verify Google token
     const ticket = await client.verifyIdToken({
       idToken: credential,
-      audience: process.env.GOOGLE_CLIENT_ID,
+      audience: GOOGLE_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
+    const normalizedEmail = normalizeEmailValue(email);
 
     // Check if user exists in database
-    let user = await User.findOne({ email: email.toLowerCase() });
+    let user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
       return res.status(404).json({ message: 'You are not registered. Please register first.' });
@@ -160,17 +199,22 @@ export const googleRegister = async (req, res) => {
       return res.status(400).json({ message: 'Google credential is required' });
     }
 
+    if (!GOOGLE_CLIENT_ID) {
+      return res.status(500).json({ message: 'Google authentication is not configured' });
+    }
+
     // Verify Google token
     const ticket = await client.verifyIdToken({
       idToken: credential,
-      audience: process.env.GOOGLE_CLIENT_ID,
+      audience: GOOGLE_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
+    const normalizedEmail = normalizeEmailValue(email);
 
     // Check if user already exists
-    const userExists = await User.findOne({ email: email.toLowerCase() });
+    const userExists = await User.findOne({ email: normalizedEmail });
     if (userExists) {
       return res.status(409).json({ message: 'User already exists with this email' });
     }
@@ -178,7 +222,7 @@ export const googleRegister = async (req, res) => {
     // Create new user with Google data
     const user = await User.create({
       username: name,
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       googleId,
       avatar: picture,
     });
@@ -205,12 +249,17 @@ export const googleRegister = async (req, res) => {
 export const forgotPassword = async (req, res) => {
   try {
     const { email, resetUrl } = req.body;
+    const normalizedEmail = normalizeEmailValue(email);
 
-    if (!email) {
+    if (!normalizedEmail) {
       return res.status(400).json({ message: 'Please provide your email' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({ message: 'Please provide a valid email address' });
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
       return res.status(404).json({

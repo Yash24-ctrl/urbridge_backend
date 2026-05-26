@@ -10,6 +10,12 @@ import {
   saveAnalysis,
   getLatestAnalysis,
 } from "../controllers/resumeController.js";
+import {
+  extractResumeDataHeuristically,
+  normalizeParsedResumeData,
+  DEFAULT_RESUME_PARSE,
+  extractTextFromOpenRouterAnnotations,
+} from "../utils/resumeParser.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,7 +31,7 @@ router.get("/profile", protect, getProfile);
 router.post("/analysis", protect, saveAnalysis);
 router.get("/analysis/latest", protect, getLatestAnalysis);
 
-async function callAI(prompt) {
+async function callAIWithMessages(messages, extraPayload = {}) {
   const key = process.env.OPENROUTER_API_KEY;
 
   if (!key) {
@@ -46,15 +52,10 @@ async function callAI(prompt) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-          model: "openrouter/auto",
-
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
+        model: "openrouter/auto",
+        messages,
         temperature: 0.1,
+        ...extraPayload,
       }),
     }
   );
@@ -69,14 +70,91 @@ async function callAI(prompt) {
     );
   }
 
-  let text = data.choices?.[0]?.message?.content || "";
+  return data;
+}
 
-  text = text
-    .replace(/```json/g, "")
-    .replace(/```/g, "")
-    .trim();
+function getAssistantText(data) {
+  const content = data?.choices?.[0]?.message?.content;
 
-  return text;
+  if (typeof content === "string") {
+    return content.replace(/```json/gi, "").replace(/```/g, "").trim();
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item?.type === "text") {
+          return item.text || "";
+        }
+        return "";
+      })
+      .join("\n")
+      .replace(/```json/gi, "")
+      .replace(/```/g, "")
+      .trim();
+  }
+
+  return "";
+}
+
+async function callAI(prompt) {
+  const data = await callAIWithMessages([
+    {
+      role: "user",
+      content: prompt,
+    },
+  ]);
+
+  return getAssistantText(data);
+}
+
+function buildPdfContent(prompt, pdfBase64, fileName = "resume.pdf") {
+  return [
+    {
+      type: "text",
+      text: prompt,
+    },
+    {
+      type: "file",
+      file: {
+        filename: fileName,
+        file_data: `data:application/pdf;base64,${pdfBase64}`,
+      },
+    },
+  ];
+}
+
+async function extractPdfTextWithFileParser(pdfBase64, fileName = "resume.pdf") {
+  const responseData = await callAIWithMessages(
+    [
+      {
+        role: "user",
+        content: buildPdfContent(
+          "Extract all readable resume text from this PDF. Preserve the original order, headings, bullet points, contact lines, job titles, dates, project names, skills, certifications, and line breaks. Return plain text only.",
+          pdfBase64,
+          fileName
+        ),
+      },
+    ],
+    {
+      plugins: [
+        {
+          id: "file-parser",
+          pdf: {
+            engine: "mistral-ocr",
+          },
+        },
+      ],
+    }
+  );
+
+  return {
+    annotationText: extractTextFromOpenRouterAnnotations(responseData),
+    assistantText: getAssistantText(responseData),
+  };
 }
 
 // Generate interview questions
@@ -109,82 +187,74 @@ Format:
   }
 });
 
-// Parse Resume
+// Parse resume using deterministic extraction from the best available text.
 router.post("/parse-resume", async (req, res) => {
   try {
-    const { pdfText } = req.body;
+    const { pdfText = "", pdfBase64 = "", fileName = "resume.pdf" } = req.body;
 
-    if (!pdfText || pdfText.trim().length < 50) {
+    if ((!pdfText || pdfText.trim().length < 50) && !pdfBase64) {
       return res.status(400).json({
-        error: "PDF text too short or empty",
+        error: "Resume PDF data is missing",
       });
     }
 
-    const prompt = `
-You are an expert resume parser with 10+ years of experience in HR and recruitment.
+    console.log("Starting deterministic resume parsing...");
 
-Carefully analyze this resume and extract accurate information.
+    let textForParsing = String(pdfText || "").trim();
 
-Rules:
-- Extract ONLY what's explicitly mentioned in the resume
-- If something is not found, use the default value
-- Skills should be relevant technical/professional skills only
-- Experience should be total years (number as string, e.g., "2", "5", "0")
-- Education should be highest level: "PhD", "Master's", "Bachelor's", "Diploma", or "High School"
-- Projects count should be number of projects mentioned (as string)
-- Certifications should be actual certification names, not courses
-- City should be current location if mentioned
-- Previous job title should be most recent role
-
-Resume Text:
-${pdfText.slice(0, 15000)}
-
-Return ONLY valid JSON with this exact structure:
-{
-  "yearsOfExperience": "0",
-  "educationLevel": "Bachelor's",
-  "desiredJobRole": "Software Engineer",
-  "completedProjects": "3",
-  "skills": ["Python", "JavaScript", "React"],
-  "certifications": ["AWS Certified Developer"],
-  "currentCity": "Mumbai",
-  "previousJobTitle": "Junior Developer"
-}
-`;
-
-    const rawText = await callAI(prompt);
-
-    let parsed;
-
-    try {
-      parsed = JSON.parse(rawText);
-    } catch (err) {
-      console.log("Failed JSON parse, retrying...", rawText);
-      
-      // Retry once with stricter prompt
-      const retryPrompt = `
-Extract ONLY the JSON from this text. Return valid JSON only:
-
-${rawText}
-`;
-      const retryText = await callAI(retryPrompt);
-      parsed = JSON.parse(retryText);
+    if (pdfBase64) {
+      try {
+        const { annotationText, assistantText } = await extractPdfTextWithFileParser(
+          pdfBase64,
+          fileName
+        );
+        const ocrText = (annotationText || assistantText || "").trim();
+        if (ocrText.length > textForParsing.length) {
+          textForParsing = ocrText;
+        }
+      } catch (ocrError) {
+        console.error("PDF OCR text extraction failed during parse step:", ocrError.message);
+      }
     }
 
-    // Validate and set defaults for missing fields
-    parsed.yearsOfExperience = parsed.yearsOfExperience || "0";
-    parsed.educationLevel = parsed.educationLevel || "Bachelor's";
-    parsed.desiredJobRole = parsed.desiredJobRole || "";
-    parsed.completedProjects = parsed.completedProjects || "0";
-    parsed.skills = Array.isArray(parsed.skills) ? parsed.skills.filter(s => s && s.trim()) : [];
-    parsed.certifications = Array.isArray(parsed.certifications) ? parsed.certifications.filter(c => c && c.trim()) : [];
-    parsed.currentCity = parsed.currentCity || "";
-    parsed.previousJobTitle = parsed.previousJobTitle || "";
+    const finalHeuristics = extractResumeDataHeuristically(textForParsing);
+    const parsed = normalizeParsedResumeData({}, finalHeuristics, textForParsing);
 
-    console.log("Resume parsed successfully:", parsed);
+    console.log("Deterministic parsed result:", JSON.stringify(parsed, null, 2));
     res.json(parsed);
   } catch (error) {
     console.error("Resume Parse Error:", error);
+    const { pdfText = "" } = req.body;
+    const heuristicOnly = extractResumeDataHeuristically(pdfText);
+    res.json(normalizeParsedResumeData({}, heuristicOnly, pdfText));
+  }
+});
+
+// Extract text from PDF using OpenRouter file parsing / OCR when needed.
+router.post("/extract-pdf-text", protect, async (req, res) => {
+  try {
+    const { pdfBase64, fileName = "resume.pdf" } = req.body;
+
+    if (!pdfBase64) {
+      return res.status(400).json({ error: "No PDF provided" });
+    }
+
+    console.log("Extracting text from PDF using file parsing...");
+
+    const { annotationText, assistantText } = await extractPdfTextWithFileParser(
+      pdfBase64,
+      fileName
+    );
+    const extractedText = annotationText || assistantText;
+
+    if (!extractedText || extractedText.trim().length < 50) {
+      return res.status(400).json({ error: "Could not extract text from PDF" });
+    }
+
+    console.log(`AI extracted ${extractedText.length} characters from PDF`);
+    res.json({ text: extractedText });
+  } catch (error) {
+    console.error("PDF text extraction error:", error);
     res.status(500).json({ error: error.message });
   }
 });

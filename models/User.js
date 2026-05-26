@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { EMAIL_PATTERN, normalizeEmailValue } from '../utils/emailValidation.js';
 
 const userSchema = new mongoose.Schema(
   {
@@ -18,6 +19,8 @@ const userSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
+      set: normalizeEmailValue,
+      match: [EMAIL_PATTERN, 'Please provide a valid email address.'],
     },
     password: {
       type: String,
