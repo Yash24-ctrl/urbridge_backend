@@ -25,7 +25,7 @@ dotenv.config({ path: path.join(__dirname, "../.env") });
 const router = express.Router();
 const MIN_PDF_TEXT_LENGTH = 50;
 const ML_SERVICE_PDF_URL =
-  process.env.ML_SERVICE_PDF_URL || "http://127.0.0.1:5001/extract-pdf-text";
+  process.env.ML_SERVICE_PDF_URL || "http://127.0.0.1:5001/parse-pdf";
 
 // Resume analysis routes (protected)
 router.post("/analyze", protect, analyzeManualResume);
@@ -114,16 +114,38 @@ async function callAI(prompt) {
   return getAssistantText(data);
 }
 
+function decodePdfBase64ToBuffer(pdfBase64) {
+  const rawValue = String(pdfBase64 || "").trim();
+
+  if (!rawValue) {
+    throw new Error("No PDF provided");
+  }
+
+  const normalizedBase64 = rawValue.startsWith("data:application/pdf;base64,")
+    ? rawValue.split(",", 2)[1]
+    : rawValue;
+
+  if (!normalizedBase64) {
+    throw new Error("Invalid PDF data provided");
+  }
+
+  return Buffer.from(normalizedBase64, "base64");
+}
+
 async function extractPdfTextWithMlService(pdfBase64, fileName = "resume.pdf") {
+  const pdfBuffer = decodePdfBase64ToBuffer(pdfBase64);
+  const formData = new FormData();
+  const safeFileName = path.basename(String(fileName || "resume.pdf")) || "resume.pdf";
+
+  formData.append(
+    "pdf",
+    new Blob([pdfBuffer], { type: "application/pdf" }),
+    safeFileName
+  );
+
   const response = await fetch(ML_SERVICE_PDF_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      pdfBase64,
-      fileName,
-    }),
+    body: formData,
   });
 
   const data = await response.json().catch(() => ({}));

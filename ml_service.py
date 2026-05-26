@@ -29,6 +29,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import pdfplumber
+import PyPDF2
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -37,21 +39,8 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-
-try:
-    import pdfplumber
-except ImportError:
-    pdfplumber = None
-
-try:
-    from PyPDF2 import PdfReader
-except ImportError:
-    PdfReader = None
-
-try:
-    from pdfminer.high_level import extract_text as pdfminer_extract_text
-except ImportError:
-    pdfminer_extract_text = None
+from pdfminer.high_level import extract_text as pdfminer_extract_text
+from werkzeug.utils import secure_filename
 
 try:
     from pymongo import MongoClient
@@ -119,6 +108,7 @@ TARGET_FIELD_ALIASES = [
 app = Flask(__name__)
 MAX_PDF_UPLOAD_BYTES = 10 * 1024 * 1024
 MIN_PDF_TEXT_LENGTH = 50
+SHORT_PDF_TEXT_ERROR = "PDF text too short or empty. Please upload a text-based PDF."
 GENERIC_PDF_EXTRACTION_ERROR = (
     "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based."
 )
@@ -177,11 +167,8 @@ def extract_text_with_pdfplumber(pdf_bytes: bytes) -> str:
 
 
 def extract_text_with_pypdf2(pdf_bytes: bytes) -> str:
-    if PdfReader is None:
-        raise RuntimeError("PyPDF2 is not installed")
-
     pages: List[str] = []
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+    reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
     for page in reader.pages:
         page_text = normalize_extracted_pdf_text(page.extract_text() or "")
         if page_text:
@@ -259,7 +246,7 @@ def extract_pdf_text_with_fallbacks(pdf_bytes: bytes) -> Dict[str, Any]:
         raise ValueError(IMAGE_BASED_PDF_ERROR)
 
     if best_text and len(best_text) < MIN_PDF_TEXT_LENGTH:
-        raise ValueError(GENERIC_PDF_EXTRACTION_ERROR)
+        raise ValueError(SHORT_PDF_TEXT_ERROR)
 
     raise ValueError(GENERIC_PDF_EXTRACTION_ERROR)
 
@@ -1428,6 +1415,42 @@ def extract_pdf_text():
         return jsonify({"error": GENERIC_PDF_EXTRACTION_ERROR}), 500
 
 
+@app.route("/parse-pdf", methods=["POST"])
+def parse_pdf():
+    try:
+        if "pdf" not in request.files:
+            return jsonify({"error": "No PDF file provided"}), 400
+
+        file = request.files["pdf"]
+        file_name = secure_filename(file.filename or "resume.pdf") or "resume.pdf"
+        pdf_bytes = file.read()
+
+        if not pdf_bytes:
+            return jsonify({"error": "No PDF file provided"}), 400
+
+        if len(pdf_bytes) > MAX_PDF_UPLOAD_BYTES:
+            return jsonify({"error": "PDF size must be 10MB or less"}), 413
+
+        result = extract_pdf_text_with_fallbacks(pdf_bytes)
+        extracted_text = normalize_extracted_pdf_text(result.get("text", ""))
+
+        if len(extracted_text) < MIN_PDF_TEXT_LENGTH:
+            return jsonify({"error": SHORT_PDF_TEXT_ERROR}), 400
+
+        return jsonify({
+            "text": extracted_text,
+            "extractor": result.get("extractor", ""),
+            "characters": len(extracted_text),
+            "fileName": file_name,
+            "isImageBased": False,
+        }), 200
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        print(f"parse-pdf endpoint error: {exc}")
+        return jsonify({"error": GENERIC_PDF_EXTRACTION_ERROR}), 500
+
+
 @app.route("/predict", methods=["POST"])
 def predict():
     payload = request.get_json(silent=True) or {}
@@ -1452,6 +1475,7 @@ def index():
         "endpoints": {
             "health": "http://127.0.0.1:5001/health",
             "predict": "POST http://127.0.0.1:5001/predict",
+            "parsePdf": "POST http://127.0.0.1:5001/parse-pdf",
             "extractPdfText": "POST http://127.0.0.1:5001/extract-pdf-text",
             "frontend": "http://127.0.0.1:5173",
             "backend": "http://127.0.0.1:5000/api/health",
