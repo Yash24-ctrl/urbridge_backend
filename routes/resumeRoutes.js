@@ -1,7 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
 import path from "path";
-import { Readable } from "node:stream";
 import { fileURLToPath } from "url";
 import { protect } from "../middleware/authMiddleware.js";
 import {
@@ -190,27 +189,137 @@ async function extractPdfTextWithMlService(pdfBase64, fileName = "resume.pdf") {
   return extractPdfTextWithMlServiceBuffer(pdfBuffer, fileName);
 }
 
-async function readUploadedPdfFromRequest(req) {
-  const multipartRequest = new Request("http://localhost/api/resume/upload-pdf", {
-    method: req.method,
-    headers: req.headers,
-    body: Readable.toWeb(req),
-    duplex: "half",
+async function readRequestBodyBuffer(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let totalBytes = 0;
+    let isFinished = false;
+
+    const fail = (error) => {
+      if (isFinished) {
+        return;
+      }
+
+      isFinished = true;
+      reject(error);
+    };
+
+    req.on("data", (chunk) => {
+      if (isFinished) {
+        return;
+      }
+
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        fail(createHttpError("PDF size must be 10MB or less", 413));
+        req.destroy();
+        return;
+      }
+
+      chunks.push(Buffer.from(chunk));
+    });
+
+    req.on("end", () => {
+      if (isFinished) {
+        return;
+      }
+
+      isFinished = true;
+      resolve(Buffer.concat(chunks));
+    });
+
+    req.on("error", (error) => {
+      fail(error);
+    });
   });
+}
 
-  const formData = await multipartRequest.formData();
-  const uploadedPdf = formData.get("pdf");
+function extractMultipartBoundary(contentType = "") {
+  const boundaryMatch = String(contentType || "").match(
+    /boundary=(?:"([^"]+)"|([^;]+))/i
+  );
 
-  if (!uploadedPdf || typeof uploadedPdf.arrayBuffer !== "function") {
+  return boundaryMatch?.[1] || boundaryMatch?.[2] || "";
+}
+
+function parseMultipartParts(bodyBuffer, boundary) {
+  const parts = new Map();
+  const bodyText = bodyBuffer.toString("latin1");
+  const boundaryMarker = `--${boundary}`;
+  const rawParts = bodyText.split(boundaryMarker);
+
+  for (const rawPart of rawParts) {
+    if (!rawPart || rawPart === "--" || rawPart === "--\r\n") {
+      continue;
+    }
+
+    const withoutLeadingBreak = rawPart.startsWith("\r\n")
+      ? rawPart.slice(2)
+      : rawPart;
+    const normalizedPart = withoutLeadingBreak.endsWith("\r\n")
+      ? withoutLeadingBreak.slice(0, -2)
+      : withoutLeadingBreak;
+    const headerEndIndex = normalizedPart.indexOf("\r\n\r\n");
+
+    if (headerEndIndex === -1) {
+      continue;
+    }
+
+    const headerText = normalizedPart.slice(0, headerEndIndex);
+    const contentText = normalizedPart.slice(headerEndIndex + 4);
+    const dispositionMatch = headerText.match(
+      /content-disposition:[^\r\n]*name="([^"]+)"(?:;[^\r\n]*filename="([^"]*)")?/i
+    );
+
+    if (!dispositionMatch) {
+      continue;
+    }
+
+    parts.set(dispositionMatch[1], {
+      name: dispositionMatch[1],
+      filename: dispositionMatch[2] || "",
+      contentType:
+        headerText.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() || "",
+      buffer: Buffer.from(contentText, "latin1"),
+    });
+  }
+
+  return parts;
+}
+
+async function readUploadedPdfFromRequest(req) {
+  const contentType = String(req.headers["content-type"] || "");
+
+  if (!/multipart\/form-data/i.test(contentType)) {
+    throw createHttpError("Expected multipart/form-data PDF upload", 400);
+  }
+
+  const boundary = extractMultipartBoundary(contentType);
+  if (!boundary) {
+    throw createHttpError("Invalid multipart upload boundary", 400);
+  }
+
+  const requestBody = await readRequestBodyBuffer(
+    req,
+    MAX_PDF_UPLOAD_BYTES + 1024 * 1024
+  );
+  const multipartParts = parseMultipartParts(requestBody, boundary);
+  const uploadedPdf = multipartParts.get("pdf");
+
+  if (!uploadedPdf || !Buffer.isBuffer(uploadedPdf.buffer) || uploadedPdf.buffer.length === 0) {
     throw createHttpError("No PDF file provided", 400);
   }
 
-  const fileName = path.basename(String(uploadedPdf.name || "resume.pdf")) || "resume.pdf";
-  const pdfBuffer = Buffer.from(await uploadedPdf.arrayBuffer());
+  if (uploadedPdf.buffer.length > MAX_PDF_UPLOAD_BYTES) {
+    throw createHttpError("PDF size must be 10MB or less", 413);
+  }
+
+  const fileName =
+    path.basename(String(uploadedPdf.filename || "resume.pdf")) || "resume.pdf";
 
   return {
     fileName,
-    pdfBuffer,
+    pdfBuffer: uploadedPdf.buffer,
   };
 }
 
