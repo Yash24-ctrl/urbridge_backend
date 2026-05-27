@@ -220,8 +220,8 @@ const EDUCATION_PATTERNS = [
     patterns: [/\bdiploma\b/i, /\bpolytechnic\b/i, /\bassociate degree\b/i],
   },
   {
-    level: "Other",
-    customEducation: "High School",
+    level: "High School",
+    customEducation: "",
     patterns: [/\bhigh school\b/i, /\bhigher secondary\b/i, /\bsecondary school\b/i, /\b12th\b/i, /\bintermediate\b/i],
   },
 ];
@@ -333,13 +333,13 @@ const COMMON_CITY_HINTS = [
 
 const DEFAULT_RESUME_PARSE = {
   yearsOfExperience: "0",
-  educationLevel: "Other",
-  customEducation: "Not specified",
+  educationLevel: "Bachelor's",
+  customEducation: "",
   desiredJobRole: "Professional",
   completedProjects: "N/A",
   skills: ["Not specified"],
   certifications: ["N/A"],
-  currentCity: "Not specified",
+  currentCity: "",
   previousJobTitle: "N/A",
 };
 
@@ -541,6 +541,53 @@ function monthDiff(start, end) {
   return years * 12 + months + 1;
 }
 
+function formatYearsOfExperience(value = 0) {
+  const numeric = Number(value);
+  if (Number.isNaN(numeric) || numeric < 0) {
+    return DEFAULT_RESUME_PARSE.yearsOfExperience;
+  }
+
+  const roundedToHalfYear = Math.round(numeric * 2) / 2;
+  return Number.isInteger(roundedToHalfYear)
+    ? String(roundedToHalfYear)
+    : roundedToHalfYear.toFixed(1).replace(/\.0$/, "");
+}
+
+function isInternshipText(value = "") {
+  return /\b(intern|internship)\b/i.test(value);
+}
+
+function extractExperienceEntries(lines = []) {
+  const entries = [];
+  const rangePattern =
+    /\b((?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{4}|\d{4})\s*(?:-|to|until)\s*((?:present|current|till date|now|(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{4}|\d{4}))\b/gi;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] || "";
+    const contextText = [lines[index - 1], line, lines[index + 1]]
+      .filter(Boolean)
+      .join(" ");
+
+    let match;
+    while ((match = rangePattern.exec(line)) !== null) {
+      const start = parseDateValue(match[1]);
+      const end = parseDateValue(match[2]);
+
+      if (start && end && end >= start) {
+        entries.push({
+          start,
+          end,
+          isInternship: isInternshipText(contextText),
+        });
+      }
+    }
+
+    rangePattern.lastIndex = 0;
+  }
+
+  return entries;
+}
+
 function extractYearsOfExperience(text = "", sections = {}) {
   const explicitPatterns = [
     /(\d{1,2}(?:\.\d)?)\+?\s+years?(?:\s+of)?\s+experience/i,
@@ -551,19 +598,38 @@ function extractYearsOfExperience(text = "", sections = {}) {
   for (const pattern of explicitPatterns) {
     const match = text.match(pattern);
     if (match) {
-      const numeric = Math.max(0, Math.round(Number(match[1])));
-      if (!Number.isNaN(numeric)) {
-        return String(numeric);
+      if (!Number.isNaN(Number(match[1]))) {
+        return formatYearsOfExperience(match[1]);
       }
     }
   }
 
-  const experienceText = [...(sections.experience || []), ...(sections.summary || [])].join("\n");
+  const experienceLines = sections.experience || [];
+  const experienceEntries = extractExperienceEntries(experienceLines);
+  if (experienceEntries.length > 0) {
+    const totalYears = experienceEntries.reduce((sum, entry) => {
+      if (entry.isInternship) {
+        return sum + 0.5;
+      }
+
+      return sum + Math.max(0, monthDiff(entry.start, entry.end) / 12);
+    }, 0);
+
+    return formatYearsOfExperience(Math.min(totalYears, 50));
+  }
+
+  if (experienceLines.some((line) => isInternshipText(line))) {
+    return formatYearsOfExperience(0.5);
+  }
+
+  const experienceText = [...experienceLines, ...(sections.summary || [])].join("\n");
   const ranges = extractDateRanges(experienceText || text);
   if (ranges.length > 0) {
-    const totalMonths = ranges.reduce((sum, range) => sum + Math.max(0, monthDiff(range.start, range.end)), 0);
-    const years = Math.max(0, Math.round(totalMonths / 12));
-    return String(Math.min(years, 50));
+    const totalYears = ranges.reduce(
+      (sum, range) => sum + Math.max(0, monthDiff(range.start, range.end) / 12),
+      0
+    );
+    return formatYearsOfExperience(Math.min(totalYears, 50));
   }
 
   return DEFAULT_RESUME_PARSE.yearsOfExperience;
@@ -642,7 +708,7 @@ function extractSkillsFromLines(lines = []) {
     }
   }
 
-  return uniqueValues(found).slice(0, 15);
+  return uniqueValues(found).slice(0, 40);
 }
 
 function countCatalogMatchesInLine(line = "") {
@@ -680,8 +746,6 @@ function extractSkills(text = "", sections = {}) {
 function cleanupCertification(value = "") {
   const cleaned = cleanLine(value)
     .replace(/^[-:]+/, "")
-    .replace(/\s+\|\s+\d{4}.*/i, "")
-    .replace(/\s+-\s+\d{4}.*/i, "")
     .trim();
 
   if (!cleaned) {
@@ -722,7 +786,7 @@ function extractCertifications(text = "", sections = {}) {
     }
   }
 
-  const uniqueCertifications = uniqueValues(certifications).slice(0, 8);
+  const uniqueCertifications = uniqueValues(certifications).slice(0, 20);
   return uniqueCertifications.length > 0 ? uniqueCertifications : DEFAULT_RESUME_PARSE.certifications;
 }
 
@@ -1113,45 +1177,49 @@ function chooseBestProjects(primary, secondary) {
 }
 
 function normalizeEducationValue(value = "", fallbackCustomEducation = "") {
-  const cleaned = cleanLine(value);
-  if (!cleaned) {
-    return {
-      educationLevel: DEFAULT_RESUME_PARSE.educationLevel,
-      customEducation: fallbackCustomEducation || DEFAULT_RESUME_PARSE.customEducation,
-    };
-  }
+  const combinedText = `${cleanLine(value)} ${cleanLine(fallbackCustomEducation)}`.trim();
 
-  if (/^phd$/i.test(cleaned)) {
+  if (/doctor of philosophy|ph\.?d|doctorate/i.test(combinedText)) {
     return { educationLevel: "PhD", customEducation: "" };
   }
 
-  if (/master/i.test(cleaned)) {
+  if (
+    /master|m\.?tech|m\.?e\b|m\.?s\b|mba|mca|pgdm|post[\s-]?graduate/i.test(
+      combinedText
+    )
+  ) {
     return { educationLevel: "Master's", customEducation: "" };
   }
 
-  if (/bachelor/i.test(cleaned)) {
+  if (
+    /bachelor|b\.?tech|b\.?e\b|b\.?sc|bca|bba|b\.?com|undergraduate/i.test(
+      combinedText
+    )
+  ) {
     return { educationLevel: "Bachelor's", customEducation: "" };
   }
 
-  if (/diploma/i.test(cleaned)) {
+  if (/diploma|polytechnic|associate degree/i.test(combinedText)) {
     return { educationLevel: "Diploma", customEducation: "" };
   }
 
-  if (/high school|secondary|12th|intermediate/i.test(cleaned)) {
-    return { educationLevel: "Other", customEducation: "High School" };
-  }
-
-  if (/^other$/i.test(cleaned)) {
-    return {
-      educationLevel: "Other",
-      customEducation: fallbackCustomEducation || DEFAULT_RESUME_PARSE.customEducation,
-    };
+  if (/high school|higher secondary|secondary school|12th|intermediate/i.test(combinedText)) {
+    return { educationLevel: "High School", customEducation: "" };
   }
 
   return {
-    educationLevel: "Other",
-    customEducation: cleaned || fallbackCustomEducation || DEFAULT_RESUME_PARSE.customEducation,
+    educationLevel: "Bachelor's",
+    customEducation: "",
   };
+}
+
+function normalizeYearsValue(value = "") {
+  const match = cleanLine(String(value || "")).match(/\d+(?:\.\d+)?/);
+  if (!match) {
+    return "";
+  }
+
+  return formatYearsOfExperience(match[0]);
 }
 
 export function parseJsonObjectFromText(rawText = "") {
@@ -1239,17 +1307,23 @@ Extract these exact fields from the resume:
 Rules:
 1. Return ONLY valid JSON.
 2. Use the resume itself as the source of truth. Use the heuristic hints only as backup, not as hard facts.
-3. "educationLevel" must be one of: "Diploma", "Bachelor's", "Master's", "PhD", "Other".
-4. If educationLevel is "Other", put the actual education text in "customEducation". Otherwise set "customEducation" to "".
-5. "yearsOfExperience" must be a whole number string such as "0", "1", "3".
-6. "completedProjects" must be the actual project names or short project titles joined by " | ". Do NOT return a count.
-7. "skills" must be an array of clear skills, technologies, or tools found in the resume. Do NOT guess skills that are not explicitly present.
-8. "certifications" must be full certification names. If none are found, return ["N/A"].
-9. "currentCity" must be the current city/location if found, otherwise "Not specified".
-10. "previousJobTitle" must be the most recent actual role title if found, otherwise "N/A".
-11. "desiredJobRole" should come from the resume objective, headline, recent role, or strong skill context. Do not leave it empty.
-12. Never return blank strings for completedProjects, currentCity, previousJobTitle, or desiredJobRole.
-13. Never invent project names, certifications, job titles, cities, or roles that are not grounded in the resume text.
+3. "yearsOfExperience" must count ONLY actual work experience.
+4. Count each internship as 0.5 years, even if the duration looks longer or shorter.
+5. If no work experience is found, set "yearsOfExperience" to "0".
+6. "educationLevel" must be exactly one of: "High School", "Diploma", "Bachelor's", "Master's", "PhD".
+7. Map B.Tech, BE, BSc, BCA, BBA, B.Com and similar undergraduate degrees to "Bachelor's".
+8. Map M.Tech, ME, MSc, MBA, MCA, PGDM and similar postgraduate degrees to "Master's".
+9. If education is unclear, default to "Bachelor's".
+10. Set "customEducation" to "" unless the resume explicitly contains a useful custom education detail that is not already captured by the allowed values.
+11. "desiredJobRole" must come from the headline or job title near the top of the resume. If that is missing, use the most recent role title.
+12. "completedProjects" must be actual project names or short project titles joined by " | ". Do NOT return a count.
+13. "skills" must include EVERY skill explicitly mentioned in the resume, including programming languages, frameworks, databases, cloud tools, platforms, libraries, tools, and soft skills. Do not omit skills that appear in lists, project lines, or experience bullets.
+14. Do NOT guess skills that are not explicitly present in the resume text.
+15. "certifications" must contain the FULL certification names exactly as written in the resume. Do not shorten, normalize, or rewrite them.
+16. "currentCity" must be the city from the address or location if it is present. If not found, return "".
+17. "previousJobTitle" must be the MOST RECENT job title exactly from the resume. If the only experience is an internship, use the internship role.
+18. Never invent project names, certifications, job titles, locations, experience, or roles that are not grounded in the resume text.
+19. Keep array order aligned to the resume where possible.
 
 Heuristic hints:
 ${JSON.stringify(heuristicData, null, 2)}
@@ -1264,7 +1338,7 @@ Return JSON in this exact shape:
   "customEducation": "",
   "desiredJobRole": "Software Engineer",
   "completedProjects": "Project A | Project B",
-  "skills": ["Python", "SQL", "React"],
+  "skills": ["Python", "SQL", "React", "Communication"],
   "certifications": ["AWS Certified Cloud Practitioner"],
   "currentCity": "Mumbai",
   "previousJobTitle": "Software Engineer Intern"
@@ -1286,14 +1360,14 @@ export function normalizeParsedResumeData(rawData = {}, heuristicData = {}, sour
     .filter((value) => !isPlaceholderText(value))
     .filter((value) => isGroundedInText(value, groundedSource, 0.6));
   const heuristicSkills = normalizeArrayInput(heuristic.skills).filter((value) => !isPlaceholderText(value));
-  const mergedSkills = uniqueValues([...heuristicSkills, ...aiSkills]).slice(0, 15);
+  const mergedSkills = uniqueValues([...aiSkills, ...heuristicSkills]).slice(0, 40);
 
   const aiCertifications = normalizeArrayInput(safeInput.certifications)
     .filter((value) => !isPlaceholderText(value))
     .filter((value) => isGroundedInText(value, groundedSource, 0.6));
   const heuristicCertifications = normalizeArrayInput(heuristic.certifications)
     .filter((value) => !isPlaceholderText(value));
-  const mergedCertifications = uniqueValues([...heuristicCertifications, ...aiCertifications]).slice(0, 8);
+  const mergedCertifications = uniqueValues([...aiCertifications, ...heuristicCertifications]).slice(0, 20);
 
   const aiPreviousTitle = normalizeTitleCandidate(safeInput.previousJobTitle);
   const heuristicPreviousTitle = normalizeTitleCandidate(heuristic.previousJobTitle);
@@ -1303,11 +1377,13 @@ export function normalizeParsedResumeData(rawData = {}, heuristicData = {}, sour
     DEFAULT_RESUME_PARSE.previousJobTitle
   );
 
-  const heuristicYearsCandidate = cleanLine(String(heuristic.yearsOfExperience || DEFAULT_RESUME_PARSE.yearsOfExperience));
-  const aiYearsCandidate = cleanLine(String(safeInput.yearsOfExperience || ""));
+  const heuristicYearsCandidate = normalizeYearsValue(
+    heuristic.yearsOfExperience || DEFAULT_RESUME_PARSE.yearsOfExperience
+  );
+  const aiYearsCandidate = normalizeYearsValue(safeInput.yearsOfExperience || "");
   const normalizedYears =
-    heuristicYearsCandidate.match(/\d+/)?.[0] ||
-    aiYearsCandidate.match(/\d+/)?.[0] ||
+    aiYearsCandidate ||
+    heuristicYearsCandidate ||
     DEFAULT_RESUME_PARSE.yearsOfExperience;
 
   const aiDesiredRole = normalizeRoleCandidate(safeInput.desiredJobRole);
@@ -1331,10 +1407,7 @@ export function normalizeParsedResumeData(rawData = {}, heuristicData = {}, sour
   return {
     yearsOfExperience: normalizedYears,
     educationLevel: educationFromInput.educationLevel,
-    customEducation:
-      educationFromInput.educationLevel === "Other"
-        ? educationFromInput.customEducation || DEFAULT_RESUME_PARSE.customEducation
-        : "",
+    customEducation: educationFromInput.customEducation || "",
     desiredJobRole: desiredRole || DEFAULT_RESUME_PARSE.desiredJobRole,
     completedProjects: chooseBestProjects(aiProjects, heuristicProjects),
     skills: mergedSkills.length > 0 ? mergedSkills : DEFAULT_RESUME_PARSE.skills,

@@ -14,7 +14,8 @@ import {
 import {
   extractResumeDataHeuristically,
   normalizeParsedResumeData,
-  DEFAULT_RESUME_PARSE,
+  buildResumeParserPrompt,
+  parseJsonObjectFromText,
   extractTextFromOpenRouterAnnotations,
 } from "../utils/resumeParser.js";
 
@@ -289,7 +290,7 @@ Format:
   }
 });
 
-// Parse resume using deterministic extraction from the best available text.
+// Parse resume using AI-guided extraction with heuristic grounding.
 router.post("/parse-resume", async (req, res) => {
   try {
     const { pdfText = "", pdfBase64 = "", fileName = "resume.pdf" } = req.body;
@@ -300,7 +301,7 @@ router.post("/parse-resume", async (req, res) => {
       });
     }
 
-    console.log("Starting deterministic resume parsing...");
+    console.log("Starting resume parsing...");
 
     let textForParsing = String(pdfText || "").trim();
     let extractionErrorMessage = "";
@@ -333,9 +334,35 @@ router.post("/parse-resume", async (req, res) => {
     }
 
     const finalHeuristics = extractResumeDataHeuristically(textForParsing);
-    const parsed = normalizeParsedResumeData({}, finalHeuristics, textForParsing);
+    let aiParsedData = {};
 
-    console.log("Deterministic parsed result:", JSON.stringify(parsed, null, 2));
+    try {
+      const prompt = buildResumeParserPrompt({
+        pdfText: textForParsing,
+        heuristicData: finalHeuristics,
+      });
+      const rawAiResponse = await callAI(prompt);
+      const parsedAiObject = parseJsonObjectFromText(rawAiResponse);
+
+      if (parsedAiObject && typeof parsedAiObject === "object") {
+        aiParsedData = parsedAiObject;
+      } else {
+        console.warn("AI resume parser returned non-JSON output. Falling back to heuristics.");
+      }
+    } catch (aiError) {
+      console.warn(
+        "AI resume parsing failed. Falling back to heuristic parsing:",
+        aiError.message
+      );
+    }
+
+    const parsed = normalizeParsedResumeData(
+      aiParsedData,
+      finalHeuristics,
+      textForParsing
+    );
+
+    console.log("Resume parsed result:", JSON.stringify(parsed, null, 2));
     res.json(parsed);
   } catch (error) {
     console.error("Resume Parse Error:", error);

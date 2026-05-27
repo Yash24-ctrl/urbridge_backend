@@ -1,4 +1,5 @@
 const EDUCATION_WEIGHTS = {
+  highschool: 48,
   diploma: 55,
   bachelors: 74,
   masters: 86,
@@ -147,6 +148,7 @@ function normalizeText(value = "") {
 function normalizeEducation(value = "", customValue = "") {
   const direct = normalizeText(value);
   if (direct && direct !== "other") {
+    if (direct.includes("high school")) return "highschool";
     if (direct.includes("bachelor")) return "bachelors";
     if (direct.includes("master")) return "masters";
     if (direct.includes("phd")) return "phd";
@@ -154,6 +156,7 @@ function normalizeEducation(value = "", customValue = "") {
   }
 
   const custom = normalizeText(customValue);
+  if (custom.includes("high school")) return "highschool";
   if (custom.includes("bachelor")) return "bachelors";
   if (custom.includes("master")) return "masters";
   if (custom.includes("phd")) return "phd";
@@ -379,7 +382,7 @@ function buildSmartFallbackSuggestions(data) {
   }
   
   // Priority 5: Education (unique topic)
-  if (data.educationLevel === 'other' || data.educationLevel === 'diploma') {
+  if (data.educationLevel === 'other' || data.educationLevel === 'diploma' || data.educationLevel === 'highschool') {
     addSuggestion('education_boost',
       `Consider adding relevant coursework or online certifications from platforms like Coursera or edX to strengthen your academic profile for ${data.jobRole} roles.`
     );
