@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import path from "path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "url";
 import { protect } from "../middleware/authMiddleware.js";
 import {
@@ -24,8 +25,15 @@ dotenv.config({ path: path.join(__dirname, "../.env") });
 
 const router = express.Router();
 const MIN_PDF_TEXT_LENGTH = 50;
+const MAX_PDF_UPLOAD_BYTES = 10 * 1024 * 1024;
 const ML_SERVICE_PDF_URL =
   process.env.ML_SERVICE_PDF_URL || "http://127.0.0.1:5001/parse-pdf";
+
+function createHttpError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
 
 // Resume analysis routes (protected)
 router.post("/analyze", protect, analyzeManualResume);
@@ -118,7 +126,7 @@ function decodePdfBase64ToBuffer(pdfBase64) {
   const rawValue = String(pdfBase64 || "").trim();
 
   if (!rawValue) {
-    throw new Error("No PDF provided");
+    throw createHttpError("No PDF provided", 400);
   }
 
   const normalizedBase64 = rawValue.startsWith("data:application/pdf;base64,")
@@ -126,14 +134,24 @@ function decodePdfBase64ToBuffer(pdfBase64) {
     : rawValue;
 
   if (!normalizedBase64) {
-    throw new Error("Invalid PDF data provided");
+    throw createHttpError("Invalid PDF data provided", 400);
   }
 
   return Buffer.from(normalizedBase64, "base64");
 }
 
-async function extractPdfTextWithMlService(pdfBase64, fileName = "resume.pdf") {
-  const pdfBuffer = decodePdfBase64ToBuffer(pdfBase64);
+async function extractPdfTextWithMlServiceBuffer(
+  pdfBuffer,
+  fileName = "resume.pdf"
+) {
+  if (!Buffer.isBuffer(pdfBuffer) || pdfBuffer.length === 0) {
+    throw createHttpError("No PDF provided", 400);
+  }
+
+  if (pdfBuffer.length > MAX_PDF_UPLOAD_BYTES) {
+    throw createHttpError("PDF size must be 10MB or less", 413);
+  }
+
   const formData = new FormData();
   const safeFileName = path.basename(String(fileName || "resume.pdf")) || "resume.pdf";
 
@@ -151,10 +169,11 @@ async function extractPdfTextWithMlService(pdfBase64, fileName = "resume.pdf") {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(
+    throw createHttpError(
       data?.error ||
       data?.message ||
-      "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based."
+      "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.",
+      response.status || 500
     );
   }
 
@@ -162,6 +181,35 @@ async function extractPdfTextWithMlService(pdfBase64, fileName = "resume.pdf") {
     text: String(data?.text || "").trim(),
     extractor: String(data?.extractor || "").trim(),
     isImageBased: Boolean(data?.isImageBased),
+  };
+}
+
+async function extractPdfTextWithMlService(pdfBase64, fileName = "resume.pdf") {
+  const pdfBuffer = decodePdfBase64ToBuffer(pdfBase64);
+  return extractPdfTextWithMlServiceBuffer(pdfBuffer, fileName);
+}
+
+async function readUploadedPdfFromRequest(req) {
+  const multipartRequest = new Request("http://localhost/api/resume/upload-pdf", {
+    method: req.method,
+    headers: req.headers,
+    body: Readable.toWeb(req),
+    duplex: "half",
+  });
+
+  const formData = await multipartRequest.formData();
+  const uploadedPdf = formData.get("pdf");
+
+  if (!uploadedPdf || typeof uploadedPdf.arrayBuffer !== "function") {
+    throw createHttpError("No PDF file provided", 400);
+  }
+
+  const fileName = path.basename(String(uploadedPdf.name || "resume.pdf")) || "resume.pdf";
+  const pdfBuffer = Buffer.from(await uploadedPdf.arrayBuffer());
+
+  return {
+    fileName,
+    pdfBuffer,
   };
 }
 
@@ -300,6 +348,38 @@ router.post("/parse-resume", async (req, res) => {
     }
 
     res.status(500).json({
+      error:
+        error.message ||
+        "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.",
+    });
+  }
+});
+
+router.post("/upload-pdf", async (req, res) => {
+  try {
+    const { fileName, pdfBuffer } = await readUploadedPdfFromRequest(req);
+    const { text, extractor, isImageBased } = await extractPdfTextWithMlServiceBuffer(
+      pdfBuffer,
+      fileName
+    );
+
+    if (!text || text.length < MIN_PDF_TEXT_LENGTH) {
+      return res.status(400).json({
+        error:
+          "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.",
+      });
+    }
+
+    res.json({
+      text,
+      extractor,
+      characters: text.length,
+      fileName,
+      isImageBased,
+    });
+  } catch (error) {
+    console.error("PDF upload parsing error:", error);
+    res.status(error.statusCode || 500).json({
       error:
         error.message ||
         "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.",
