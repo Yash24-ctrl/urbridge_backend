@@ -792,10 +792,25 @@ function extractCertifications(text = "", sections = {}) {
 
 function cleanupProjectTitle(value = "") {
   return cleanLine(value)
+    .replace(/^\s*(?:[-*]|\u2022|\d+[.)])\s+/, "")
     .replace(/^[-:]+/, "")
-    .replace(/\b(technologies|tech stack|tools used)\b\s*:?/i, "")
+    .replace(/^(?:project|capstone|academic project|personal project)\s*\d*\s*[:.)-]\s*/i, "")
+    .replace(/^(?:title|name)\s*[:.)-]\s*/i, "")
+    .replace(/\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{4}\s*$/i, "")
+    .replace(/\s+(?:19|20)\d{2}\s*$/i, "")
+    .replace(/\s*[\-|:\u2013\u2014]\s*$/, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+function isProjectDescriptionLine(line = "") {
+  const cleaned = cleanLine(line);
+  const normalized = normalizeKey(cleaned);
+  return (
+    /^\s*(?:[-*]|\u2022|\d+[.)])\s+/.test(line) ||
+    /^(developed|built|designed|combined|created|implemented|integrated|used|utilized|trained|deployed|improved|analyzed|managed|worked|collaborated|responsible|handled|performed|provided|generated|automated|optimized|enabled)\b/.test(normalized) ||
+    /\b(using|to generate|to recommend|based on|for feature|for real time|with integrated|workflow for|resulting in|which)\b/.test(normalized) && /[.!?]$/.test(cleaned)
+  );
 }
 
 function isLikelyProjectNoise(line = "") {
@@ -809,24 +824,24 @@ function isLikelyProjectNoise(line = "") {
 }
 
 function extractProjectNameFromLine(line = "") {
-  const cleaned = cleanupProjectTitle(line);
+  if (isProjectDescriptionLine(line)) {
+    return "";
+  }
+
+  const withoutTrailingDate = cleanLine(line)
+    .replace(/\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{4}\s*$/i, "")
+    .replace(/\s+(?:19|20)\d{2}\s*$/i, "")
+    .replace(/\s*[\-|:\u2013\u2014]\s*$/, "");
+  const titleCandidate = withoutTrailingDate
+    .split(/\s+\|\s+|\s+-\s+|\s+\u2013\s+|\s+\u2014\s+|:\s+/)[0];
+  const cleaned = cleanupProjectTitle(titleCandidate);
+
   if (!cleaned || isLikelyProjectNoise(cleaned)) {
     return "";
   }
 
-  const pieces = cleaned
-    .split(/\s+\|\s+|\s+-\s+|:\s+/)
-    .map(cleanupProjectTitle)
-    .filter(Boolean);
-
-  for (const piece of pieces) {
-    const wordCount = piece.split(/\s+/).length;
-    if (wordCount >= 2 && wordCount <= 10 && !/\b(react|python|sql|mongodb|node\.?js|aws)\b/i.test(piece.toLowerCase())) {
-      return piece;
-    }
-  }
-
-  if (cleaned.split(/\s+/).length <= 10 && !/[.!?]$/.test(cleaned)) {
+  const wordCount = cleaned.split(/\s+/).length;
+  if (wordCount >= 2 && wordCount <= 16 && !/^project\s*\d*$/i.test(cleaned) && !/[.!?]$/.test(cleaned)) {
     return cleaned;
   }
 
@@ -842,7 +857,7 @@ function extractProjects(text = "", sections = {}) {
   const fallbackDescriptions = [];
 
   for (const line of lines) {
-    if (isLikelyProjectNoise(line)) {
+    if (isLikelyProjectNoise(line) || isProjectDescriptionLine(line)) {
       continue;
     }
 
@@ -858,12 +873,12 @@ function extractProjects(text = "", sections = {}) {
     }
   }
 
-  const uniqueProjects = uniqueValues(projectNames).slice(0, 5);
+  const uniqueProjects = uniqueValues(projectNames).slice(0, 12);
   if (uniqueProjects.length > 0) {
     return uniqueProjects.join(" | ");
   }
 
-  const fallback = uniqueValues(fallbackDescriptions).slice(0, 3).join(" | ");
+  const fallback = uniqueValues(fallbackDescriptions).slice(0, 12).join(" | ");
   return fallback || DEFAULT_RESUME_PARSE.completedProjects;
 }
 
@@ -1127,7 +1142,7 @@ function normalizeProjectValues(value = "") {
     }
   }
 
-  return uniqueValues(normalized).slice(0, 5);
+  return uniqueValues(normalized).slice(0, 12);
 }
 
 function normalizeArrayInput(value) {
@@ -1316,7 +1331,7 @@ Rules:
 9. If education is unclear, default to "Bachelor's".
 10. Set "customEducation" to "" unless the resume explicitly contains a useful custom education detail that is not already captured by the allowed values.
 11. "desiredJobRole" must come from the headline or job title near the top of the resume. If that is missing, use the most recent role title.
-12. "completedProjects" must be actual project names or short project titles joined by " | ". Do NOT return a count.
+12. "completedProjects" must include ALL actual project names or short project headlines joined by " | ". In the Projects section, use only the bold/title line before technologies, dates, links, and bullet descriptions. Do NOT include descriptions, bullets, tech stacks, links, dates, or counts.
 13. "skills" must include EVERY skill explicitly mentioned in the resume, including programming languages, frameworks, databases, cloud tools, platforms, libraries, tools, and soft skills. Do not omit skills that appear in lists, project lines, or experience bullets.
 14. Do NOT guess skills that are not explicitly present in the resume text.
 15. "certifications" must contain the FULL certification names exactly as written in the resume. Do not shorten, normalize, or rewrite them.
