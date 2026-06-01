@@ -232,41 +232,50 @@ function computeProjectQuality(projectText = "", matchedSkills = []) {
 
 // AI-powered suggestion generation
 async function generateAISuggestions(data) {
-  const prompt = `You are a senior technical recruiter at Google, Amazon, and Microsoft with 15 years of hiring experience.
+  const trendingSkills = Array.isArray(data.trendingSkills) && data.trendingSkills.length > 0
+    ? data.trendingSkills
+    : [...new Set([...(data.matchedSkills || []), ...(data.missingSkills || [])])];
+  const matchedSkills = Array.isArray(data.matchedSkills) ? data.matchedSkills : [];
+  const missingSkills = Array.isArray(data.missingSkills) ? data.missingSkills : [];
+  const resumeContent = data.fullResumeText || [
+    `Years of Experience: ${data.yearsOfExperience}`,
+    `Education: ${data.educationLevel}`,
+    `Current Skills: ${data.skills.join(', ') || 'None'}`,
+    `Projects: ${data.projects || 'None provided'}`,
+    `Certifications: ${data.certifications.length > 0 ? data.certifications.join(', ') : 'None'}`,
+    `Current City: ${data.city || 'Not specified'}`,
+    `Previous Job Title: ${data.previousJobTitle || 'Not specified'}`,
+  ].join('\n');
 
-Analyze this candidate profile:
-- Target Role: ${data.jobRole}
-- Years of Experience: ${data.yearsOfExperience}
-- Education: ${data.educationLevel}
-- Current Skills: ${data.skills.join(', ')}
-- Projects: ${data.projects || 'None provided'}
-- Certifications: ${data.certifications.length > 0 ? data.certifications.join(', ') : 'None'}
-- Current City: ${data.city || 'Not specified'}
-- Previous Job Title: ${data.previousJobTitle || 'Not specified'}
+  const prompt = `SYSTEM:
+You are an expert ATS resume coach. Never give generic advice. Every suggestion must reference something specific from this exact resume and tie it directly to the target job role.
 
-Missing critical skills for ${data.jobRole}: ${data.missingSkills.join(', ')}
+USER:
+Target Job Role: ${data.jobRole}
+Required/Trending Skills for this role: ${trendingSkills.join(', ') || 'Not provided'}
+Resume Content: ${resumeContent}
+Matched Skills: ${matchedSkills.join(', ') || 'None'}
+Missing Skills: ${missingSkills.join(', ') || 'None'}
+Real skills only; do not invent generic skills.
 
-Generate exactly 8 resume improvement suggestions.
+Generate between 5-8 improvement suggestions. Each must:
 
-STRICT RULES:
-1. Every suggestion must be UNIQUE — never repeat the same advice twice even in different words
-2. Every suggestion must reference the candidate's ACTUAL data (mention their real skills, real project, real role)
-3. Be SPECIFIC — say exactly what to add, not just "improve your skills"
-4. Tailor advice to their experience level (${data.yearsOfExperience} years) — don't suggest senior-level things to a junior candidate
-5. Prioritize suggestions by impact — highest impact first
-6. Do NOT give generic advice like "add more details" or "improve your resume"
+- Mention a specific section, project, certification, education item, job title, or skill from THIS resume by name
+- Say exactly what to add, change, or remove with an example
+- Explain why it matters specifically for ${data.jobRole}
+- Be ranked: Fix Now / Improve Soon / Polish Later
+
+Do not give suggestions like "add measurable outcomes" or "match keywords" because these are too generic.
+Instead say things like "Fix Now: In your Project X, add the accuracy metric and mention PyTorch since it is the top missing skill for ${data.jobRole}."
 
 Return ONLY this JSON (no markdown, no extra text):
 {
   "suggestions": [
-    "Specific suggestion 1 mentioning their actual data",
-    "Specific suggestion 2 mentioning their actual data",
-    "Specific suggestion 3",
-    "Specific suggestion 4",
-    "Specific suggestion 5",
-    "Specific suggestion 6",
-    "Specific suggestion 7",
-    "Specific suggestion 8"
+    "Fix Now: Specific suggestion referencing exact resume content, matched or missing skills, and ${data.jobRole}",
+    "Improve Soon: Specific suggestion referencing exact resume content, matched or missing skills, and ${data.jobRole}",
+    "Improve Soon: Specific suggestion referencing exact resume content, matched or missing skills, and ${data.jobRole}",
+    "Polish Later: Specific suggestion referencing exact resume content, matched or missing skills, and ${data.jobRole}",
+    "Polish Later: Specific suggestion referencing exact resume content, matched or missing skills, and ${data.jobRole}"
   ]
 }`;
 
@@ -679,7 +688,19 @@ export async function analyzeResumeProfile(profile) {
     certifications,
     city: profile.city || "",
     previousJobTitle: profile.previousJobTitle || "",
+    trendingSkills: roleContext.requiredSkills,
+    matchedSkills,
     missingSkills: missingSkills.slice(0, 6),
+    fullResumeText: [
+      `Desired Job Role: ${profile.desiredJobRoles || roleContext.label}`,
+      `Previous Job Title: ${profile.previousJobTitle || "Not specified"}`,
+      `Experience: ${experience} year${experience === 1 ? "" : "s"}`,
+      `Education: ${profile.education || educationKey}`,
+      `Skills: ${userSkills.join(", ") || "None"}`,
+      `Projects: ${projectText || "None provided"}`,
+      `Certifications: ${certifications.join(", ") || "None"}`,
+      `Current City: ${profile.currentCity || profile.city || "Not specified"}`,
+    ].join("\n"),
   });
 
   return {
