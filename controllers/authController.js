@@ -42,18 +42,52 @@ const generateGoogleToken = (payload) => {
 
 const client = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
 
-function getFrontendUrl() {
-  return String(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+function getFrontendUrl(req) {
+  const host = req?.get?.('host') || '';
+  const isLocalHost = /^localhost(:|$)|^127\.0\.0\.1(:|$)/.test(host);
+
+  if (isLocalHost) {
+    return 'http://localhost:5173';
+  }
+
+  const configuredUrl = String(process.env.FRONTEND_URL || process.env.CLIENT_URL || '').trim();
+
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/+$/, '');
+  }
+
+  return `https://${host}`;
+}
+
+function getRequestOrigin(req) {
+  const host = req.get('host');
+  const isLocalHost = /^localhost(:|$)|^127\.0\.0\.1(:|$)/.test(host || '');
+  const forwardedProtocol = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  const protocol = forwardedProtocol || (isLocalHost ? req.protocol || 'http' : 'https');
+
+  return `${protocol}://${host}`;
+}
+
+function getLinkedInCallbackUrl(req) {
+  const configuredCallbackUrl = String(process.env.LINKEDIN_CALLBACK_URL || '').trim();
+  const host = req.get('host') || '';
+  const isLiveRequest = host && !/^localhost(:|$)|^127\.0\.0\.1(:|$)/.test(host);
+
+  if (configuredCallbackUrl && !isLiveRequest) {
+    return configuredCallbackUrl;
+  }
+
+  return `${getRequestOrigin(req)}/api/user/linkedin/callback`;
 }
 
 function getLinkedInMissingConfig() {
-  return ['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET', 'LINKEDIN_CALLBACK_URL'].filter(
+  return ['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET'].filter(
     (key) => !String(process.env[key] || '').trim()
   );
 }
 
-function redirectLinkedInError(res, message = 'LinkedIn authentication failed') {
-  const redirectUrl = new URL('/login', getFrontendUrl());
+function redirectLinkedInError(req, res, message = 'LinkedIn authentication failed') {
+  const redirectUrl = new URL('/login', getFrontendUrl(req));
   redirectUrl.searchParams.set('error', message);
   return res.redirect(redirectUrl.toString());
 }
@@ -134,7 +168,7 @@ function extractLinkedInOpenIdProfile(userInfo = {}, idTokenPayload = {}) {
   };
 }
 
-async function exchangeLinkedInCode(code) {
+async function exchangeLinkedInCode(req, code) {
   const response = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
     method: 'POST',
     headers: {
@@ -143,7 +177,7 @@ async function exchangeLinkedInCode(code) {
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code,
-      redirect_uri: process.env.LINKEDIN_CALLBACK_URL,
+      redirect_uri: getLinkedInCallbackUrl(req),
       client_id: process.env.LINKEDIN_CLIENT_ID,
       client_secret: process.env.LINKEDIN_CLIENT_SECRET,
     }),
@@ -416,7 +450,7 @@ export const linkedinAuth = (req, res, next) => {
   const authorizationUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
   authorizationUrl.searchParams.set('response_type', 'code');
   authorizationUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID);
-  authorizationUrl.searchParams.set('redirect_uri', process.env.LINKEDIN_CALLBACK_URL);
+  authorizationUrl.searchParams.set('redirect_uri', getLinkedInCallbackUrl(req));
   authorizationUrl.searchParams.set('scope', 'openid profile email');
   authorizationUrl.searchParams.set('state', crypto.randomBytes(16).toString('hex'));
 
@@ -438,17 +472,19 @@ export const linkedinCallback = (req, res, next) => {
         throw new Error('LinkedIn authorization code is missing');
       }
 
-      const tokenResponse = await exchangeLinkedInCode(code);
+      const tokenResponse = await exchangeLinkedInCode(req, code);
       const userInfo = await fetchLinkedInUserInfo(tokenResponse.access_token);
       const idTokenPayload = tokenResponse.id_token ? decodeJwtPayload(tokenResponse.id_token) : {};
       const linkedInUser = extractLinkedInOpenIdProfile(userInfo, idTokenPayload);
       const user = await findOrCreateLinkedInUser(linkedInUser);
       const token = generateToken(user._id);
 
-      return res.redirect(`http://localhost:5173/auth/callback?token=${encodeURIComponent(token)}`);
+      const redirectUrl = new URL('/auth/callback', getFrontendUrl(req));
+      redirectUrl.searchParams.set('token', token);
+      return res.redirect(redirectUrl.toString());
     } catch (callbackError) {
       console.error('LinkedIn callback error:', callbackError);
-      return redirectLinkedInError(res, callbackError.message);
+      return redirectLinkedInError(req, res, callbackError.message);
     }
   })();
 };
