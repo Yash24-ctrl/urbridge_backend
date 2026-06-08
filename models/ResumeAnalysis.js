@@ -23,6 +23,48 @@ const resumeAnalysisSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    scoreBreakdown: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+    strongPoints: {
+      type: [String],
+      default: [],
+    },
+    profileSnapshot: {
+      name: {
+        type: String,
+        trim: true,
+        default: '',
+      },
+      desiredJobRoles: {
+        type: String,
+        trim: true,
+        default: '',
+      },
+      education: {
+        type: String,
+        trim: true,
+        default: '',
+      },
+      experience: {
+        type: Number,
+        default: 0,
+      },
+      skills: {
+        type: [String],
+        default: [],
+      },
+      certifications: {
+        type: [String],
+        default: [],
+      },
+      previousJobTitle: {
+        type: String,
+        trim: true,
+        default: '',
+      },
+    },
   },
   {
     timestamps: true,

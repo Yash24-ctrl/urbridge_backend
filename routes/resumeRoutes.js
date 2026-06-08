@@ -8,6 +8,7 @@ import {
   saveProfile,
   getProfile,
   saveAnalysis,
+  getAnalysisHistory,
   getLatestAnalysis,
 } from "../controllers/resumeController.js";
 import {
@@ -40,6 +41,7 @@ router.post("/analyze", protect, analyzeManualResume);
 router.post("/profile", protect, saveProfile);
 router.get("/profile", protect, getProfile);
 router.post("/analysis", protect, saveAnalysis);
+router.get("/analysis/history", protect, getAnalysisHistory);
 router.get("/analysis/latest", protect, getLatestAnalysis);
 
 async function callAIWithMessages(messages, extraPayload = {}) {

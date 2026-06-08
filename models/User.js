@@ -7,7 +7,7 @@ const userSchema = new mongoose.Schema(
     username: {
       type: String,
       required: function () {
-        return !this.googleId; // username required only for non-Google users
+        return !this.googleId && !this.linkedinId; // username required only for non-social users
       },
       trim: true,
       minlength: 2,
@@ -25,7 +25,7 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: function () {
-        return !this.googleId; // password required only for non-Google users
+        return !this.googleId && !this.linkedinId; // password required only for non-social users
       },
       minlength: 6,
     },
@@ -33,6 +33,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
       sparse: true, // allows multiple nulls without unique conflict
+    },
+    linkedinId: {
+      type: String,
+      default: null,
+      sparse: true,
     },
     avatar: {
       type: String,

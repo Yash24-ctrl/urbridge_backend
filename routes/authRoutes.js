@@ -4,6 +4,8 @@ import {
   login,
   googleLogin,
   googleRegister,
+  linkedinAuth,
+  linkedinCallback,
   forgotPassword,
   resetPassword,
   getMe,
@@ -17,6 +19,8 @@ router.post('/register', register);
 router.post('/login', login);
 router.post('/google-login', googleLogin);
 router.post('/google-register', googleRegister);
+router.get('/linkedin', linkedinAuth);
+router.get('/linkedin/callback', linkedinCallback);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
 

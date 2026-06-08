@@ -42,6 +42,164 @@ const generateGoogleToken = (payload) => {
 
 const client = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
 
+function getFrontendUrl() {
+  return String(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+}
+
+function getLinkedInMissingConfig() {
+  return ['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET', 'LINKEDIN_CALLBACK_URL'].filter(
+    (key) => !String(process.env[key] || '').trim()
+  );
+}
+
+function redirectLinkedInError(res, message = 'LinkedIn authentication failed') {
+  const redirectUrl = new URL('/login', getFrontendUrl());
+  redirectUrl.searchParams.set('error', message);
+  return res.redirect(redirectUrl.toString());
+}
+
+function getLinkedInProfileValue(profile, keys) {
+  for (const key of keys) {
+    const value = key.split('.').reduce((source, part) => source?.[part], profile);
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
+function decodeJwtPayload(token) {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+
+    const normalizedPayload = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const paddedPayload = normalizedPayload.padEnd(
+      normalizedPayload.length + ((4 - (normalizedPayload.length % 4)) % 4),
+      '='
+    );
+
+    return JSON.parse(Buffer.from(paddedPayload, 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function extractLinkedInProfile(profile) {
+  const firstName = getLinkedInProfileValue(profile, [
+    'name.givenName',
+    '_json.given_name',
+    '_json.localizedFirstName',
+  ]);
+  const lastName = getLinkedInProfileValue(profile, [
+    'name.familyName',
+    '_json.family_name',
+    '_json.localizedLastName',
+  ]);
+  const email =
+    profile?.emails?.[0]?.value ||
+    getLinkedInProfileValue(profile, ['email', '_json.email', '_json.emailAddress']);
+  const linkedinId = profile?.id || getLinkedInProfileValue(profile, ['_json.sub', '_json.id']);
+  const avatar =
+    profile?.photos?.[0]?.value ||
+    getLinkedInProfileValue(profile, ['_json.picture', '_json.profilePicture.displayImage']);
+  const username =
+    [firstName, lastName].filter(Boolean).join(' ') ||
+    getLinkedInProfileValue(profile, ['displayName', '_json.name']) ||
+    normalizeEmailValue(email).split('@')[0];
+
+  return {
+    linkedinId,
+    email: normalizeEmailValue(email),
+    username,
+    avatar,
+  };
+}
+
+function extractLinkedInOpenIdProfile(userInfo = {}, idTokenPayload = {}) {
+  const email = normalizeEmailValue(userInfo.email || idTokenPayload.email);
+  const firstName = userInfo.given_name || idTokenPayload.given_name || '';
+  const lastName = userInfo.family_name || idTokenPayload.family_name || '';
+  const username =
+    userInfo.name ||
+    idTokenPayload.name ||
+    [firstName, lastName].filter(Boolean).join(' ') ||
+    email.split('@')[0];
+
+  return {
+    linkedinId: userInfo.sub || idTokenPayload.sub,
+    email,
+    username,
+    avatar: userInfo.picture || idTokenPayload.picture || null,
+  };
+}
+
+async function exchangeLinkedInCode(code) {
+  const response = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: process.env.LINKEDIN_CALLBACK_URL,
+      client_id: process.env.LINKEDIN_CLIENT_ID,
+      client_secret: process.env.LINKEDIN_CLIENT_SECRET,
+    }),
+  });
+
+  const tokenResponse = await response.json();
+
+  if (!response.ok || !tokenResponse.access_token) {
+    throw new Error(tokenResponse.error_description || tokenResponse.error || 'LinkedIn token exchange failed');
+  }
+
+  return tokenResponse;
+}
+
+async function fetchLinkedInUserInfo(accessToken) {
+  const response = await fetch('https://api.linkedin.com/v2/userinfo', {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const userInfo = await response.json();
+
+  if (!response.ok) {
+    throw new Error(userInfo.message || userInfo.error_description || userInfo.error || 'LinkedIn userinfo failed');
+  }
+
+  return userInfo;
+}
+
+async function findOrCreateLinkedInUser(linkedInUser) {
+  if (!linkedInUser.email || !isValidEmail(linkedInUser.email)) {
+    throw new Error('LinkedIn email was not provided');
+  }
+
+  let user = await User.findOne({ email: linkedInUser.email });
+
+  if (user) {
+    if (!user.linkedinId && linkedInUser.linkedinId) {
+      user.linkedinId = linkedInUser.linkedinId;
+    }
+    if (!user.avatar && linkedInUser.avatar) {
+      user.avatar = linkedInUser.avatar;
+    }
+    await user.save();
+    return user;
+  }
+
+  return User.create({
+    username: linkedInUser.username,
+    email: linkedInUser.email,
+    linkedinId: linkedInUser.linkedinId,
+    avatar: linkedInUser.avatar,
+  });
+}
+
 // @desc    Register new user
 // @route   POST /api/user/register
 // @access  Public
@@ -241,6 +399,58 @@ export const googleRegister = async (req, res) => {
     console.error('Google register error:', error);
     res.status(401).json({ message: 'Google authentication failed' });
   }
+};
+
+// @desc    LinkedIn Login/Register redirect
+// @route   GET /api/auth/linkedin
+// @access  Public
+export const linkedinAuth = (req, res, next) => {
+  const missingConfig = getLinkedInMissingConfig();
+
+  if (missingConfig.length) {
+    return res.status(500).json({
+      message: `LinkedIn authentication is not configured. Missing: ${missingConfig.join(', ')}`,
+    });
+  }
+
+  const authorizationUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
+  authorizationUrl.searchParams.set('response_type', 'code');
+  authorizationUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID);
+  authorizationUrl.searchParams.set('redirect_uri', process.env.LINKEDIN_CALLBACK_URL);
+  authorizationUrl.searchParams.set('scope', 'openid profile email');
+  authorizationUrl.searchParams.set('state', crypto.randomBytes(16).toString('hex'));
+
+  return res.redirect(authorizationUrl.toString());
+};
+
+// @desc    LinkedIn OAuth callback
+// @route   GET /api/auth/linkedin/callback
+// @access  Public
+export const linkedinCallback = (req, res, next) => {
+  return (async () => {
+    try {
+      if (req.query.error) {
+        throw new Error(String(req.query.error_description || req.query.error));
+      }
+
+      const code = typeof req.query.code === 'string' ? req.query.code : '';
+      if (!code) {
+        throw new Error('LinkedIn authorization code is missing');
+      }
+
+      const tokenResponse = await exchangeLinkedInCode(code);
+      const userInfo = await fetchLinkedInUserInfo(tokenResponse.access_token);
+      const idTokenPayload = tokenResponse.id_token ? decodeJwtPayload(tokenResponse.id_token) : {};
+      const linkedInUser = extractLinkedInOpenIdProfile(userInfo, idTokenPayload);
+      const user = await findOrCreateLinkedInUser(linkedInUser);
+      const token = generateToken(user._id);
+
+      return res.redirect(`http://localhost:5173/auth/callback?token=${encodeURIComponent(token)}`);
+    } catch (callbackError) {
+      console.error('LinkedIn callback error:', callbackError);
+      return redirectLinkedInError(res, callbackError.message);
+    }
+  })();
 };
 
 // @desc    Forgot password - send reset link

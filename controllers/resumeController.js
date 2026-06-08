@@ -5,6 +5,22 @@ import { analyzeResumeProfile, analyzeExperiencedProfile } from '../services/res
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:5001/predict';
 
+function getAnalysisSource(source) {
+  return source === 'upload' ? 'upload' : 'manual';
+}
+
+function buildProfileSnapshot(profileData = {}) {
+  return {
+    name: profileData.name || '',
+    desiredJobRoles: profileData.desiredJobRoles || '',
+    education: profileData.education || '',
+    experience: Number(profileData.experience) || 0,
+    skills: Array.isArray(profileData.skills) ? profileData.skills.slice(0, 12) : [],
+    certifications: Array.isArray(profileData.certifications) ? profileData.certifications.slice(0, 8) : [],
+    previousJobTitle: profileData.previousJobTitle || '',
+  };
+}
+
 async function analyzeWithMlService(profileData) {
   const response = await fetch(ML_SERVICE_URL, {
     method: 'POST',
@@ -33,6 +49,7 @@ export const saveProfile = async (req, res) => {
       userId,
       ...sanitizeResumePayload(req.body, req.user?.username || ''),
     };
+    const analysisSource = getAnalysisSource(req.body.source);
 
     const profile = await ResumeProfile.findOneAndUpdate(
       { userId },
@@ -60,6 +77,7 @@ export const analyzeManualResume = async (req, res) => {
       userId,
       ...sanitizeResumePayload(req.body, req.user?.username || ''),
     };
+    const analysisSource = getAnalysisSource(req.body.source);
 
     const requiredFields = [
       ['skills', profileData.skills.length > 0],
@@ -98,11 +116,12 @@ export const analyzeManualResume = async (req, res) => {
 
     const analysis = await ResumeAnalysis.create({
       userId,
-      source: 'manual',
+      source: analysisSource,
       score: analysisResult.score,
       suggestions: analysisResult.suggestions,
       scoreBreakdown: analysisResult.scoreBreakdown || {},
       strongPoints: analysisResult.strongPoints || [],
+      profileSnapshot: buildProfileSnapshot(profileData),
     });
 
     res.status(200).json({
@@ -145,7 +164,7 @@ export const getProfile = async (req, res) => {
 // @access  Private
 export const saveAnalysis = async (req, res) => {
   try {
-    const { source, score, suggestions } = req.body;
+    const { source, score, suggestions, scoreBreakdown, strongPoints, profileSnapshot } = req.body;
     const userId = req.user._id;
 
     if (typeof score !== 'number') {
@@ -154,9 +173,12 @@ export const saveAnalysis = async (req, res) => {
 
     const analysis = await ResumeAnalysis.create({
       userId,
-      source: source || 'manual',
+      source: getAnalysisSource(source),
       score,
       suggestions: Array.isArray(suggestions) ? suggestions : [],
+      scoreBreakdown: scoreBreakdown || {},
+      strongPoints: Array.isArray(strongPoints) ? strongPoints : [],
+      profileSnapshot: profileSnapshot || {},
     });
 
     res.status(201).json({
@@ -166,6 +188,24 @@ export const saveAnalysis = async (req, res) => {
   } catch (error) {
     console.error('Save analysis error:', error);
     res.status(500).json({ message: 'Server error while saving analysis' });
+  }
+};
+
+// @desc    Get resume analysis history for logged-in user
+// @route   GET /api/resume/analysis/history
+// @access  Private
+export const getAnalysisHistory = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const analyses = await ResumeAnalysis.find({ userId })
+      .sort({ createdAt: -1 })
+      .limit(30)
+      .lean();
+
+    res.status(200).json({ analyses });
+  } catch (error) {
+    console.error('Get analysis history error:', error);
+    res.status(500).json({ message: 'Server error while fetching resume history' });
   }
 };
 
