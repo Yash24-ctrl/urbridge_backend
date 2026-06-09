@@ -76,6 +76,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/counseling', counselingRoutes);
 app.use('/api/counselling', counselingRoutes);
+app.use('/api/user/counseling', counselingRoutes);
+app.use('/api/user/counselling', counselingRoutes);
 
 // 404 handler
 app.use((req, res) => {
