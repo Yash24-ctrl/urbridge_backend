@@ -10,7 +10,12 @@ import {
   resetPassword,
   getMe,
 } from '../controllers/authController.js';
-import { protect } from '../middleware/authMiddleware.js';
+import {
+  createCounselingBooking,
+  getAvailableSlots,
+  getUserBookingHistory,
+} from '../controllers/counselingController.js';
+import { optionalProtect, protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -23,6 +28,12 @@ router.get('/linkedin', linkedinAuth);
 router.get('/linkedin/callback', linkedinCallback);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
+router.get('/counseling/slots', getAvailableSlots);
+router.get('/counselling/slots', getAvailableSlots);
+router.post('/counseling/book', optionalProtect, createCounselingBooking);
+router.post('/counselling/book', optionalProtect, createCounselingBooking);
+router.get('/counseling/history', optionalProtect, getUserBookingHistory);
+router.get('/counselling/history', optionalProtect, getUserBookingHistory);
 
 // Protected routes
 router.get('/me', protect, getMe);
