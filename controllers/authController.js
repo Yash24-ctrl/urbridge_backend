@@ -2,11 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
-import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import User from '../models/User.js';
 import { isValidEmail, normalizeEmailValue } from '../utils/emailValidation.js';
-import { sendResetPasswordEmail } from '../utils/emailService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,9 +22,9 @@ function readFrontendGoogleClientId() {
   }
 }
 
-const GOOGLE_CLIENT_ID = String(
-  process.env.GOOGLE_CLIENT_ID || readFrontendGoogleClientId()
-).trim();
+function getGoogleClientId() {
+  return String(process.env.GOOGLE_CLIENT_ID || readFrontendGoogleClientId()).trim();
+}
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -40,7 +38,24 @@ const generateGoogleToken = (payload) => {
   });
 };
 
-const client = new OAuth2Client(GOOGLE_CLIENT_ID || undefined);
+async function verifyGoogleCredential(credential) {
+  const googleClientId = getGoogleClientId();
+
+  if (!googleClientId) {
+    throw new Error('Google authentication is not configured');
+  }
+
+  const googleClient = new OAuth2Client(googleClientId);
+  const verification = googleClient.verifyIdToken({
+    idToken: credential,
+    audience: googleClientId,
+  });
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('Google authentication timed out')), 8000);
+  });
+
+  return Promise.race([verification, timeout]);
+}
 
 function getFrontendUrl(req) {
   const host = req?.get?.('host') || '';
@@ -336,15 +351,12 @@ export const googleLogin = async (req, res) => {
       return res.status(400).json({ message: 'Google credential is required' });
     }
 
-    if (!GOOGLE_CLIENT_ID) {
+    if (!getGoogleClientId()) {
       return res.status(500).json({ message: 'Google authentication is not configured' });
     }
 
     // Verify Google token
-    const ticket = await client.verifyIdToken({
-      idToken: credential,
-      audience: GOOGLE_CLIENT_ID,
-    });
+    const ticket = await verifyGoogleCredential(credential);
 
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
@@ -391,15 +403,12 @@ export const googleRegister = async (req, res) => {
       return res.status(400).json({ message: 'Google credential is required' });
     }
 
-    if (!GOOGLE_CLIENT_ID) {
+    if (!getGoogleClientId()) {
       return res.status(500).json({ message: 'Google authentication is not configured' });
     }
 
     // Verify Google token
-    const ticket = await client.verifyIdToken({
-      idToken: credential,
-      audience: GOOGLE_CLIENT_ID,
-    });
+    const ticket = await verifyGoogleCredential(credential);
 
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
@@ -487,112 +496,6 @@ export const linkedinCallback = (req, res, next) => {
       return redirectLinkedInError(req, res, callbackError.message);
     }
   })();
-};
-
-// @desc    Forgot password - send reset link
-// @route   POST /api/user/forgot-password
-// @access  Public
-export const forgotPassword = async (req, res) => {
-  try {
-    const { email, resetUrl } = req.body;
-    const normalizedEmail = normalizeEmailValue(email);
-
-    if (!normalizedEmail) {
-      return res.status(400).json({ message: 'Please provide your email' });
-    }
-
-    if (!isValidEmail(normalizedEmail)) {
-      return res.status(400).json({ message: 'Please provide a valid email address' });
-    }
-
-    const user = await User.findOne({ email: normalizedEmail });
-
-    if (!user) {
-      return res.status(404).json({
-        message: 'You are not registered. Please register first.',
-      });
-    }
-
-    // Generate reset token
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-
-    // Save hashed token to user
-    user.resetPasswordToken = hashedToken;
-    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 hour
-    await user.save();
-
-    // Always prefer the configured public frontend URL for email links.
-    const requestedResetUrl = typeof resetUrl === 'string' ? resetUrl.trim() : '';
-    const configuredResetUrl = process.env.RESET_PASSWORD_URL?.trim();
-    const configuredClientUrl = process.env.CLIENT_URL?.trim();
-    const resetBaseUrl = configuredResetUrl
-      || (configuredClientUrl
-        ? `${configuredClientUrl.replace(/\/+$/, '')}/reset-password`
-        : requestedResetUrl || 'http://localhost:5173/reset-password');
-    const separator = resetBaseUrl.includes('?') ? '&' : '?';
-    const resetLink = `${resetBaseUrl}${separator}token=${resetToken}`;
-
-    // Try to send email
-    try {
-      await sendResetPasswordEmail(user.email, resetLink);
-    } catch (emailError) {
-      console.error('Email failed to send:', emailError);
-      // Return the link so the frontend can use it as a fallback
-      return res.status(200).json({
-        message: 'Reset link generated (email service may be unavailable)',
-        resetLink,
-        token: resetToken,
-        emailError: emailError.message,
-      });
-    }
-
-    res.status(200).json({
-      message: 'Reset link sent to your email',
-    });
-  } catch (error) {
-    console.error('Forgot password error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-// @desc    Reset password with token
-// @route   POST /api/user/reset-password
-// @access  Public
-export const resetPassword = async (req, res) => {
-  try {
-    const { token, newPassword } = req.body;
-
-    if (!token || !newPassword) {
-      return res.status(400).json({ message: 'Token and new password are required' });
-    }
-
-    // Hash the token from request to compare with stored hash
-    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
-
-    // Find user with valid token
-    const user = await User.findOne({
-      resetPasswordToken: hashedToken,
-      resetPasswordExpires: { $gt: Date.now() },
-    });
-
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid or expired reset token' });
-    }
-
-    // Update password and clear reset fields
-    user.password = newPassword;
-    user.resetPasswordToken = null;
-    user.resetPasswordExpires = null;
-    await user.save();
-
-    res.status(200).json({
-      message: 'Password reset successful. You can now log in with your new password.',
-    });
-  } catch (error) {
-    console.error('Reset password error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
 };
 
 // @desc    Get current user

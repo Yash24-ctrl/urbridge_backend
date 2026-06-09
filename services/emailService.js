@@ -207,36 +207,6 @@ export async function sendBookingConfirmationEmail(details) {
   return { userInfo, counselorInfo };
 }
 
-export async function sendResetPasswordEmail(to, resetLink) {
-  const config = assertEmailConfig();
-
-  const mailOptions = {
-    from: config.from,
-    to,
-    subject: 'Reset Your UrBridge.ai Password',
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #0f52ba;">UrBridge.ai Password Reset</h2>
-        <p>Hello,</p>
-        <p>You requested a password reset for your UrBridge.ai account. Click the link below to reset your password:</p>
-        <div style="margin: 24px 0;">
-          <a href="${escapeHtml(resetLink)}"
-             style="background: #0f52ba; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
-            Reset Password
-          </a>
-        </div>
-        <p>Or copy and paste this URL into your browser:</p>
-        <p style="word-break: break-all; color: #555;">${escapeHtml(resetLink)}</p>
-        <p style="color: #888; font-size: 12px;">This link will expire in 1 hour. If you did not request this, please ignore this email.</p>
-        <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
-        <p style="color: #888; font-size: 12px;">UrBridge.ai - Resume Analyzer</p>
-      </div>
-    `,
-  };
-
-  return createTransporter(config).sendMail(mailOptions);
-}
-
 export async function verifyEmailConfig() {
   let config;
 

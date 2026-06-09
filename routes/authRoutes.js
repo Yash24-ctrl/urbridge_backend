@@ -6,8 +6,6 @@ import {
   googleRegister,
   linkedinAuth,
   linkedinCallback,
-  forgotPassword,
-  resetPassword,
   getMe,
 } from '../controllers/authController.js';
 import {
@@ -26,8 +24,6 @@ router.post('/google-login', googleLogin);
 router.post('/google-register', googleRegister);
 router.get('/linkedin', linkedinAuth);
 router.get('/linkedin/callback', linkedinCallback);
-router.post('/forgot-password', forgotPassword);
-router.post('/reset-password', resetPassword);
 router.get('/counseling/slots', getAvailableSlots);
 router.get('/counselling/slots', getAvailableSlots);
 router.post('/counseling/book', optionalProtect, createCounselingBooking);
