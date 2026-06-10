@@ -26,10 +26,13 @@ router.get('/linkedin', linkedinAuth);
 router.get('/linkedin/callback', linkedinCallback);
 router.get('/counseling/slots', getAvailableSlots);
 router.get('/counselling/slots', getAvailableSlots);
+router.get('/slots', getAvailableSlots);
 router.post('/counseling/book', optionalProtect, createCounselingBooking);
 router.post('/counselling/book', optionalProtect, createCounselingBooking);
+router.post('/book', optionalProtect, createCounselingBooking);
 router.get('/counseling/history', optionalProtect, getUserBookingHistory);
 router.get('/counselling/history', optionalProtect, getUserBookingHistory);
+router.get('/history', optionalProtect, getUserBookingHistory);
 
 // Protected routes
 router.get('/me', protect, getMe);
