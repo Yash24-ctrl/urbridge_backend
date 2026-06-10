@@ -76,6 +76,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'OK',
+    message: 'UrBridge.ai API is running',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Routes
 app.use('/api/user', authRoutes);
 app.use('/api/auth', authRoutes);
@@ -84,6 +92,13 @@ app.use('/api/counseling', counselingRoutes);
 app.use('/api/counselling', counselingRoutes);
 app.use('/api/user/counseling', counselingRoutes);
 app.use('/api/user/counselling', counselingRoutes);
+app.use('/user', authRoutes);
+app.use('/auth', authRoutes);
+app.use('/resume', resumeRoutes);
+app.use('/counseling', counselingRoutes);
+app.use('/counselling', counselingRoutes);
+app.use('/user/counseling', counselingRoutes);
+app.use('/user/counselling', counselingRoutes);
 
 app.get([
   '/api/user/counseling/slots',
@@ -94,6 +109,14 @@ app.get([
   '/api/counselling/slots',
   '/api/user/slots',
   '/api/auth/slots',
+  '/user/counseling/slots',
+  '/user/counselling/slots',
+  '/auth/counseling/slots',
+  '/auth/counselling/slots',
+  '/counseling/slots',
+  '/counselling/slots',
+  '/user/slots',
+  '/auth/slots',
 ], getAvailableSlots);
 
 app.post([
@@ -105,6 +128,14 @@ app.post([
   '/api/counselling/book',
   '/api/user/book',
   '/api/auth/book',
+  '/user/counseling/book',
+  '/user/counselling/book',
+  '/auth/counseling/book',
+  '/auth/counselling/book',
+  '/counseling/book',
+  '/counselling/book',
+  '/user/book',
+  '/auth/book',
 ], optionalProtect, createCounselingBooking);
 
 app.get([
@@ -116,6 +147,14 @@ app.get([
   '/api/counselling/history',
   '/api/user/history',
   '/api/auth/history',
+  '/user/counseling/history',
+  '/user/counselling/history',
+  '/auth/counseling/history',
+  '/auth/counselling/history',
+  '/counseling/history',
+  '/counselling/history',
+  '/user/history',
+  '/auth/history',
 ], optionalProtect, getUserBookingHistory);
 
 // 404 handler
