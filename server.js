@@ -17,6 +17,12 @@ import { verifyEmailConfig } from './utils/emailService.js';
 import authRoutes from './routes/authRoutes.js';
 import resumeRoutes from './routes/resumeRoutes.js';
 import counselingRoutes from './routes/counselingRoutes.js';
+import {
+  createCounselingBooking,
+  getAvailableSlots,
+  getUserBookingHistory,
+} from './controllers/counselingController.js';
+import { optionalProtect } from './middleware/authMiddleware.js';
 
 // Connect to database
 connectDB();
@@ -78,6 +84,39 @@ app.use('/api/counseling', counselingRoutes);
 app.use('/api/counselling', counselingRoutes);
 app.use('/api/user/counseling', counselingRoutes);
 app.use('/api/user/counselling', counselingRoutes);
+
+app.get([
+  '/api/user/counseling/slots',
+  '/api/user/counselling/slots',
+  '/api/auth/counseling/slots',
+  '/api/auth/counselling/slots',
+  '/api/counseling/slots',
+  '/api/counselling/slots',
+  '/api/user/slots',
+  '/api/auth/slots',
+], getAvailableSlots);
+
+app.post([
+  '/api/user/counseling/book',
+  '/api/user/counselling/book',
+  '/api/auth/counseling/book',
+  '/api/auth/counselling/book',
+  '/api/counseling/book',
+  '/api/counselling/book',
+  '/api/user/book',
+  '/api/auth/book',
+], optionalProtect, createCounselingBooking);
+
+app.get([
+  '/api/user/counseling/history',
+  '/api/user/counselling/history',
+  '/api/auth/counseling/history',
+  '/api/auth/counselling/history',
+  '/api/counseling/history',
+  '/api/counselling/history',
+  '/api/user/history',
+  '/api/auth/history',
+], optionalProtect, getUserBookingHistory);
 
 // 404 handler
 app.use((req, res) => {
