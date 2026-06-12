@@ -9,21 +9,43 @@ import { isValidEmail, normalizeEmailValue } from '../utils/emailValidation.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function readFrontendGoogleClientId() {
+function readEnvValue(filePath, key) {
   try {
-    const envFile = fs.readFileSync(
-      path.resolve(__dirname, '../../.env'),
-      'utf8'
-    );
-    const match = envFile.match(/^\s*VITE_GOOGLE_CLIENT_ID\s*=\s*(.+)\s*$/m);
-    return match ? String(match[1]).trim() : '';
+    const envFile = fs.readFileSync(filePath, 'utf8');
+    const match = envFile.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+)\\s*$`, 'm'));
+    return match ? String(match[1]).trim().replace(/^['"]|['"]$/g, '') : '';
   } catch {
     return '';
   }
 }
 
-function getGoogleClientId() {
-  return String(process.env.GOOGLE_CLIENT_ID || readFrontendGoogleClientId()).trim();
+function readFrontendGoogleClientId() {
+  const possibleEnvFiles = [
+    path.resolve(__dirname, '../../resume-analyzer-frontend/.env'),
+    path.resolve(__dirname, '../resume-analyzer-frontend/.env'),
+    path.resolve(__dirname, '../../.env'),
+  ];
+
+  for (const envFilePath of possibleEnvFiles) {
+    const clientId = readEnvValue(envFilePath, 'VITE_GOOGLE_CLIENT_ID');
+    if (clientId) return clientId;
+  }
+
+  return '';
+}
+
+function getGoogleClientIds() {
+  const clientIds = [
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.VITE_GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_IDS,
+    readFrontendGoogleClientId(),
+  ]
+    .flatMap((value) => String(value || '').split(','))
+    .map((value) => value.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean);
+
+  return [...new Set(clientIds)];
 }
 
 const generateToken = (id) => {
@@ -39,16 +61,16 @@ const generateGoogleToken = (payload) => {
 };
 
 async function verifyGoogleCredential(credential) {
-  const googleClientId = getGoogleClientId();
+  const googleClientIds = getGoogleClientIds();
 
-  if (!googleClientId) {
+  if (googleClientIds.length === 0) {
     throw new Error('Google authentication is not configured');
   }
 
-  const googleClient = new OAuth2Client(googleClientId);
+  const googleClient = new OAuth2Client(googleClientIds[0]);
   const verification = googleClient.verifyIdToken({
     idToken: credential,
-    audience: googleClientId,
+    audience: googleClientIds,
   });
   const timeout = new Promise((_, reject) => {
     setTimeout(() => reject(new Error('Google authentication timed out')), 8000);
@@ -351,7 +373,7 @@ export const googleLogin = async (req, res) => {
       return res.status(400).json({ message: 'Google credential is required' });
     }
 
-    if (!getGoogleClientId()) {
+    if (getGoogleClientIds().length === 0) {
       return res.status(500).json({ message: 'Google authentication is not configured' });
     }
 
@@ -403,7 +425,7 @@ export const googleRegister = async (req, res) => {
       return res.status(400).json({ message: 'Google credential is required' });
     }
 
-    if (!getGoogleClientId()) {
+    if (getGoogleClientIds().length === 0) {
       return res.status(500).json({ message: 'Google authentication is not configured' });
     }
 

@@ -122,6 +122,16 @@ function extractMeetDetails(event) {
 }
 
 function getFallbackMeetLink() {
+  const explicitFallbackEnabled = String(process.env.ALLOW_CONFIGURED_MEET_FALLBACK || '')
+    .trim()
+    .toLowerCase() === 'true';
+  const isProduction = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+  const fallbackEnabled = explicitFallbackEnabled || !isProduction;
+
+  if (!fallbackEnabled) {
+    return '';
+  }
+
   return (
     process.env.COUNSELOR_MEET_LINK?.trim()
     || process.env.COUNSELLOR_MEET_LINK?.trim()
@@ -131,14 +141,42 @@ function getFallbackMeetLink() {
   );
 }
 
-function buildFallbackMeetBooking(bookingDetails, reason) {
-  const meetLink = getFallbackMeetLink();
+function getGoogleMeetCodeFromLink(meetLink) {
+  const normalizedLink = String(meetLink || '').trim();
 
-  if (!meetLink) {
-    throw new Error(reason);
+  if (!normalizedLink) {
+    return '';
   }
 
-  const meetingCode = meetLink.split('/').filter(Boolean).pop() || 'configured-meet';
+  try {
+    const parsedUrl = new URL(normalizedLink);
+
+    if (parsedUrl.hostname !== 'meet.google.com') {
+      return '';
+    }
+
+    const code = parsedUrl.pathname.replace(/^\/+|\/+$/g, '').split('/')[0] || '';
+    return /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(code) ? code : '';
+  } catch {
+    return '';
+  }
+}
+
+function buildFallbackMeetBooking(bookingDetails, reason) {
+  const meetLink = getFallbackMeetLink();
+  const meetingCode = getGoogleMeetCodeFromLink(meetLink);
+
+  if (!meetLink) {
+    throw new Error(`${reason}. Original Google Meet creation is required. Check GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN.`);
+  }
+
+  if (!meetingCode) {
+    throw new Error(
+      `${reason}. COUNSELOR_MEET_LINK must be a direct Google Meet room URL like https://meet.google.com/abc-defg-hij, not the Google Meet home page.`
+    );
+  }
+
+  const normalizedMeetLink = `https://meet.google.com/${meetingCode}`;
   const calendarEventId = [
     'configured-meet',
     bookingDetails.date,
@@ -149,13 +187,22 @@ function buildFallbackMeetBooking(bookingDetails, reason) {
   console.warn('[Google Calendar] Using configured fallback Meet link:', reason);
 
   return {
-    meetLink,
+    meetLink: normalizedMeetLink,
     meetingCode,
     eventId: calendarEventId,
     calendarEventId,
     calendarLink: '',
     fallback: true,
   };
+}
+
+function getGoogleOAuthErrorMessage(error) {
+  return (
+    error?.response?.data?.error_description
+    || error?.response?.data?.error
+    || error?.message
+    || 'Google OAuth request failed'
+  );
 }
 
 function buildEventAttendees(bookingDetails, counselorEmail) {
@@ -249,6 +296,16 @@ export async function createGoogleMeetBooking(bookingDetails) {
   }
 
   const { client, calendarId } = createOAuthClient(config);
+
+  try {
+    await client.getAccessToken();
+  } catch (error) {
+    return buildFallbackMeetBooking(
+      bookingDetails,
+      `Google Calendar OAuth failed: ${getGoogleOAuthErrorMessage(error)}`
+    );
+  }
+
   const timezone = bookingDetails.timezone || 'Asia/Calcutta';
   const { startDateTime, endDateTime } = getSessionDateTimeRange(
     bookingDetails.date,
