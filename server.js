@@ -175,6 +175,8 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`  UrBridge.ai API Server`);
   console.log(`  Running on http://localhost:${PORT}`);
+  console.log(`  GOOGLE_CLIENT_ID: ${process.env.GOOGLE_CLIENT_ID ? process.env.GOOGLE_CLIENT_ID.substring(0, 20) + '...' : 'NOT SET'}`);
+  console.log(`  CLIENT_URL: ${process.env.CLIENT_URL || 'NOT SET'}`);
 });
 
 export default app;

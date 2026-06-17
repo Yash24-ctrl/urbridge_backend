@@ -67,16 +67,32 @@ async function verifyGoogleCredential(credential) {
     throw new Error('Google authentication is not configured');
   }
 
-  const googleClient = new OAuth2Client(googleClientIds[0]);
-  const verification = googleClient.verifyIdToken({
-    idToken: credential,
-    audience: googleClientIds,
-  });
-  const timeout = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error('Google authentication timed out')), 8000);
-  });
+  console.log('[Google Auth] Verifying token against client IDs:', googleClientIds.map(id => id.substring(0, 12) + '...'));
 
-  return Promise.race([verification, timeout]);
+  // Try each client ID as the OAuth2Client constructor arg
+  // The token's audience must match one of the configured client IDs
+  let lastError = null;
+  for (const clientId of googleClientIds) {
+    try {
+      const googleClient = new OAuth2Client(clientId);
+      const ticket = await Promise.race([
+        googleClient.verifyIdToken({
+          idToken: credential,
+          audience: googleClientIds,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Google authentication timed out')), 8000)
+        ),
+      ]);
+      console.log('[Google Auth] Token verified successfully with client ID:', clientId.substring(0, 12) + '...');
+      return ticket;
+    } catch (err) {
+      lastError = err;
+      console.log('[Google Auth] Verification failed with client ID:', clientId.substring(0, 12) + '...', '- Error:', err.message);
+    }
+  }
+
+  throw lastError || new Error('Google token verification failed for all client IDs');
 }
 
 function getFrontendUrl(req) {
@@ -367,41 +383,55 @@ export const login = async (req, res) => {
 // @access  Public
 export const googleLogin = async (req, res) => {
   try {
+    console.log('[Google Login] ========== Google login attempt received ==========');
     const { credential } = req.body;
+
+    console.log('[Google Login] Credential token received:', credential ? 'YES (length: ' + credential.length + ')' : 'NO');
 
     if (!credential) {
       return res.status(400).json({ message: 'Google credential is required' });
     }
 
-    if (getGoogleClientIds().length === 0) {
+    const clientIds = getGoogleClientIds();
+    console.log('[Google Login] GOOGLE_CLIENT_ID being used:', clientIds.map(id => id.substring(0, 20) + '...').join(', '));
+
+    if (clientIds.length === 0) {
+      console.error('[Google Login] No Google client IDs configured');
       return res.status(500).json({ message: 'Google authentication is not configured' });
     }
 
     // Verify Google token
     const ticket = await verifyGoogleCredential(credential);
+    console.log('[Google Login] Verification result: SUCCESS');
 
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
     const normalizedEmail = normalizeEmailValue(email);
+    console.log('[Google Login] Google profile email:', email, '| name:', name);
 
     // Check if user exists in database
     let user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
       // Auto-create user from Google profile
+      console.log('[Google Login] User not found, creating new user for:', normalizedEmail);
       user = await User.create({
         username: name,
         email: normalizedEmail,
         googleId,
         avatar: picture,
       });
-    } else if (!user.googleId) {
-      // If user exists but doesn't have googleId, link it
-      user.googleId = googleId;
-      if (picture && !user.avatar) user.avatar = picture;
-      await user.save();
+      console.log('[Google Login] User created:', user.email);
+    } else {
+      console.log('[Google Login] User found:', user.email);
+      if (!user.googleId) {
+        user.googleId = googleId;
+        if (picture && !user.avatar) user.avatar = picture;
+        await user.save();
+      }
     }
 
+    console.log('[Google Login] Login successful for:', user.email);
     res.status(200).json({
       message: 'Google login successful',
       user: {
@@ -413,8 +443,14 @@ export const googleLogin = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Google login error:', error.message || error);
-    res.status(401).json({ message: 'Google authentication failed' });
+    console.error('[Google Login] Verification result: ERROR');
+    console.error('[Google Login] Error name:', error.name);
+    console.error('[Google Login] Error message:', error.message);
+    console.error('[Google Login] Full error:', error);
+    res.status(401).json({
+      message: 'Google authentication failed',
+      detail: error.message || 'Unknown error',
+    });
   }
 };
 
