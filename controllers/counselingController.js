@@ -545,6 +545,7 @@ export async function createCounselingBooking(req, res) {
     return res.status(500).json({
       success: false,
       message: 'Unable to book session. Please try again.',
+      detail: error.message || 'Unknown error',
     });
   }
 }
