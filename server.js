@@ -177,6 +177,22 @@ app.listen(PORT, () => {
   console.log(`  Running on http://localhost:${PORT}`);
   console.log(`  GOOGLE_CLIENT_ID: ${process.env.GOOGLE_CLIENT_ID ? process.env.GOOGLE_CLIENT_ID.substring(0, 20) + '...' : 'NOT SET'}`);
   console.log(`  CLIENT_URL: ${process.env.CLIENT_URL || 'NOT SET'}`);
+
+  // Google Calendar config validation
+  const calClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
+  const calClientSecret = (process.env.GOOGLE_CLIENT_SECRET || '').trim();
+  const calRefreshToken = (process.env.GOOGLE_REFRESH_TOKEN || '').trim();
+  if (!calClientId || !calClientSecret || !calRefreshToken) {
+    console.warn('  [WARNING] Google Calendar is NOT fully configured.');
+    console.warn('  Missing:', [
+      !calClientId && 'GOOGLE_CLIENT_ID',
+      !calClientSecret && 'GOOGLE_CLIENT_SECRET',
+      !calRefreshToken && 'GOOGLE_REFRESH_TOKEN',
+    ].filter(Boolean).join(', '));
+    console.warn('  Counselling bookings will proceed without Google Meet links.');
+  } else {
+    console.log('  Google Calendar: configured');
+  }
 });
 
 export default app;

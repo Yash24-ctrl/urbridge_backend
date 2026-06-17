@@ -454,23 +454,37 @@ export async function createCounselingBooking(req, res) {
     }
 
     console.info(`[${bookingLogId}] Creating Google Meet booking`);
-    const calendarBooking = await createGoogleMeetBooking({
-      userName,
-      userEmail,
-      userPhone,
-      timezone,
-      date,
-      timeSlot,
-      helpWith,
-      counsellorName,
-      counsellorEmail,
-      counsellorTitle,
-    });
-    console.info(`[${bookingLogId}] Google Meet booking ready`, {
-      hasMeetLink: Boolean(calendarBooking.meetLink),
-      calendarEventId: calendarBooking.calendarEventId || calendarBooking.eventId || '',
-      usedFallbackMeetLink: Boolean(calendarBooking.fallback),
-    });
+    let calendarBooking;
+    try {
+      calendarBooking = await createGoogleMeetBooking({
+        userName,
+        userEmail,
+        userPhone,
+        timezone,
+        date,
+        timeSlot,
+        helpWith,
+        counsellorName,
+        counsellorEmail,
+        counsellorTitle,
+      });
+      console.info(`[${bookingLogId}] Google Meet booking ready`, {
+        hasMeetLink: Boolean(calendarBooking.meetLink),
+        calendarEventId: calendarBooking.calendarEventId || calendarBooking.eventId || '',
+        usedFallbackMeetLink: Boolean(calendarBooking.fallback),
+        meetLinkPending: Boolean(calendarBooking.meetLinkPending),
+      });
+    } catch (calendarError) {
+      console.warn(`[${bookingLogId}] Google Calendar/Meet failed, proceeding without meet link:`, calendarError.message);
+      calendarBooking = {
+        meetLink: '',
+        meetingCode: '',
+        calendarEventId: '',
+        calendarLink: '',
+        fallback: true,
+        meetLinkPending: true,
+      };
+    }
 
     const booking = await CounselingBooking.create({
       userId,
@@ -512,11 +526,17 @@ export async function createCounselingBooking(req, res) {
       console.error(`[${bookingLogId}] Counseling confirmation email error:`, error);
     }
 
+    const meetLinkPending = Boolean(calendarBooking.meetLinkPending) || !calendarBooking.meetLink;
+    const successMessage = meetLinkPending
+      ? 'Session booked! Your counsellor will share the meeting link shortly.'
+      : 'Counselling session booked successfully.';
+
     return res.status(201).json({
       success: true,
-      message: 'Counselling session booked successfully.',
+      message: successMessage,
       bookingId: bookingPayload.bookingId,
       meetLink: bookingPayload.meetLink,
+      meetLinkPending,
       calendarEventId: bookingPayload.calendarEventId,
       booking: bookingPayload,
     });
@@ -524,9 +544,7 @@ export async function createCounselingBooking(req, res) {
     console.error('BOOKING ERROR:', error);
     return res.status(500).json({
       success: false,
-      message: error.message || 'Server error while booking counseling session',
-      error: error.message,
-      stack: error.stack,
+      message: 'Unable to book session. Please try again.',
     });
   }
 }

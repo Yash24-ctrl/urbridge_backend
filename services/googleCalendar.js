@@ -114,10 +114,6 @@ function extractMeetDetails(event) {
     || meetLink.split('/').filter(Boolean).pop()
     || '';
 
-  if (!meetLink || !meetingCode) {
-    throw new Error('Google Meet link was not created');
-  }
-
   return { meetLink, meetingCode };
 }
 
@@ -163,20 +159,11 @@ function getGoogleMeetCodeFromLink(meetLink) {
 }
 
 function buildFallbackMeetBooking(bookingDetails, reason) {
+  console.warn('[Google Calendar] Using fallback:', reason);
+
   const meetLink = getFallbackMeetLink();
   const meetingCode = getGoogleMeetCodeFromLink(meetLink);
 
-  if (!meetLink) {
-    throw new Error(`${reason}. Original Google Meet creation is required. Check GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN.`);
-  }
-
-  if (!meetingCode) {
-    throw new Error(
-      `${reason}. COUNSELOR_MEET_LINK must be a direct Google Meet room URL like https://meet.google.com/abc-defg-hij, not the Google Meet home page.`
-    );
-  }
-
-  const normalizedMeetLink = `https://meet.google.com/${meetingCode}`;
   const calendarEventId = [
     'configured-meet',
     bookingDetails.date,
@@ -184,15 +171,30 @@ function buildFallbackMeetBooking(bookingDetails, reason) {
     Date.now(),
   ].filter(Boolean).join('-');
 
-  console.warn('[Google Calendar] Using configured fallback Meet link:', reason);
+  // If we have a valid configured meet link, use it
+  if (meetLink && meetingCode) {
+    const normalizedMeetLink = `https://meet.google.com/${meetingCode}`;
+    console.warn('[Google Calendar] Using configured fallback Meet link');
+    return {
+      meetLink: normalizedMeetLink,
+      meetingCode,
+      eventId: calendarEventId,
+      calendarEventId,
+      calendarLink: '',
+      fallback: true,
+    };
+  }
 
+  // No valid meet link available — return graceful response without meet link
+  console.warn('[Google Calendar] No valid Meet link available. Booking will proceed without Meet link.');
   return {
-    meetLink: normalizedMeetLink,
-    meetingCode,
+    meetLink: '',
+    meetingCode: '',
     eventId: calendarEventId,
     calendarEventId,
     calendarLink: '',
     fallback: true,
+    meetLinkPending: true,
   };
 }
 
@@ -285,6 +287,18 @@ function buildCalendarEventBody({
 }
 
 export async function createGoogleMeetBooking(bookingDetails) {
+  try {
+    return await _createGoogleMeetBookingInner(bookingDetails);
+  } catch (unexpectedError) {
+    console.error('[Google Calendar] Unexpected error in createGoogleMeetBooking:', unexpectedError.message);
+    return buildFallbackMeetBooking(
+      bookingDetails,
+      `Unexpected error: ${unexpectedError.message}`
+    );
+  }
+}
+
+async function _createGoogleMeetBookingInner(bookingDetails) {
   const config = getGoogleCalendarConfig();
   const missingConfig = getMissingGoogleCalendarKeys(config);
 
