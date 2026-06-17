@@ -388,11 +388,15 @@ export const googleLogin = async (req, res) => {
     let user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
-      return res.status(404).json({ message: 'You are not registered. Please register first.' });
-    }
-
-    // If user exists but doesn't have googleId, link it
-    if (!user.googleId) {
+      // Auto-create user from Google profile
+      user = await User.create({
+        username: name,
+        email: normalizedEmail,
+        googleId,
+        avatar: picture,
+      });
+    } else if (!user.googleId) {
+      // If user exists but doesn't have googleId, link it
       user.googleId = googleId;
       if (picture && !user.avatar) user.avatar = picture;
       await user.save();
@@ -409,7 +413,7 @@ export const googleLogin = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Google login error:', error);
+    console.error('Google login error:', error.message || error);
     res.status(401).json({ message: 'Google authentication failed' });
   }
 };
