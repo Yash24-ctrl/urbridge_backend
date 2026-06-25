@@ -9,6 +9,7 @@ const TIMEZONE = 'Asia/Calcutta';
 const TIME_SLOTS = ['10:00 AM', '12:00 PM', '02:00 PM', '04:00 PM', '06:00 PM'];
 const MAX_BOOKINGS_PER_SLOT = 1;
 const SESSION_DURATION_MINUTES = 60;
+const DEFAULT_SLOT_DATE_WINDOW_DAYS = 31;
 const COUNSELLOR_NAME = 'Ravi Shah';
 const COUNSELLOR_TITLE = 'AI Expert Counsellor';
 
@@ -144,11 +145,38 @@ function getAllowedDateOptions() {
   const parts = getTimeZoneParts();
   const today = formatDateString(parts.year, parts.month, parts.day);
 
-  return [
-    { label: 'Today', date: today, displayDate: toDisplayDate(today) },
-    { label: 'Tomorrow', date: addDays(today, 1), displayDate: toDisplayDate(addDays(today, 1)) },
-    { label: 'Day After Tomorrow', date: addDays(today, 2), displayDate: toDisplayDate(addDays(today, 2)) },
-  ];
+  return Array.from({ length: DEFAULT_SLOT_DATE_WINDOW_DAYS }, (_, index) =>
+    buildDateOption(addDays(today, index))
+  );
+}
+
+function isDateInBookableRange(dateString) {
+  const parts = getTimeZoneParts();
+  const today = formatDateString(parts.year, parts.month, parts.day);
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateString) && dateString >= today;
+}
+
+function buildDateOption(date) {
+  const parts = getTimeZoneParts();
+  const today = formatDateString(parts.year, parts.month, parts.day);
+  const tomorrow = addDays(today, 1);
+
+  let label = 'Available';
+
+  if (date === today) {
+    label = 'Today';
+  } else if (date === tomorrow) {
+    label = 'Tomorrow';
+  } else {
+    const [year, month, day] = date.split('-').map(Number);
+    label = new Intl.DateTimeFormat('en-US', {
+      weekday: 'short',
+      timeZone: 'UTC',
+    }).format(new Date(Date.UTC(year, month - 1, day)));
+  }
+
+  return { label, date, displayDate: toDisplayDate(date) };
 }
 
 function parseTimeSlot(timeSlot) {
@@ -419,13 +447,11 @@ export async function createCounselingBooking(req, res) {
       });
     }
 
-    const allowedDates = getAllowedDateOptions().map((option) => option.date);
-
-    if (!allowedDates.includes(date)) {
+    if (!isDateInBookableRange(date)) {
       console.warn(`[${bookingLogId}] Booking validation failed: invalid date`, { date });
       return res.status(400).json({
         success: false,
-        message: 'Bookings are only available for the next 3 days.',
+        message: 'Please select today or any future date.',
       });
     }
 
@@ -557,16 +583,16 @@ export async function getAvailableSlots(req, res) {
     const requestedDate = normalizeDateInput(req.query.date);
 
     if (req.query.date) {
-      const selectedDate = dateOptions.find((option) => option.date === requestedDate);
-
-      if (!selectedDate) {
+      if (!isDateInBookableRange(requestedDate)) {
         return res.status(400).json({
           success: false,
-          message: 'Bookings are only available for the next 3 days.',
+          message: 'Please select today or any future date.',
         });
       }
 
-      const [slotResponse] = buildSlotResponse([selectedDate], slotCounts);
+      const selectedDate = buildDateOption(requestedDate);
+      const selectedDateSlotCounts = await getSlotCounts([selectedDate]);
+      const [slotResponse] = buildSlotResponse([selectedDate], selectedDateSlotCounts);
 
       return res.status(200).json({
         success: true,
