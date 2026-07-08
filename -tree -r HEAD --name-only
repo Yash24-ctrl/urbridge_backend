@@ -1,0 +1,45 @@
+* [33m30e6044[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m first commit
+* [33m292f2e3[m latest changes
+* [33m7bab4bd[m Show booking error detail for debugging
+* [33m1590a6f[m latest changes
+* [33m397f52f[m fix google client id
+* [33mffd59c2[m latest changes
+* [33m0a7ff37[m update backend
+* [33m0dcebcc[m support stripped counselling routes
+* [33meb405e6[m fix counselling booking routes
+* [33medd568d[m add counselling route aliases
+* [33mf42667e[m fix google auth live
+* [33m8ca9dd0[m add counselling routes under user api
+* [33m51a71fb[m fix live counselling API fallback
+* [33m316629c[m fix linkedin login backend
+* [33md47ba79[m remove env from tracking
+* [33m371d4d1[m fix linkedin login backend
+* [33md8e6978[m latest changes
+* [33m887de43[m latest changes
+* [33maa33545[m fix resume parsing accuracy
+* [33mffb26c5[m fix resume parsing accuracy
+* [33md95358f[m add pdf bridge route
+* [33mddc7d28[m fix pdf forwarding
+* [33m5b618c0[m remove node_modules and fix gitignore
+* [33m0aad60c[m fix upload limit
+* [33md94d209[m updated feature
+[31m|[m * [33m691e117[m remove env from tracking
+[31m|[m * [33m7198583[m fix linkedin login backend
+[31m|[m * [33maf02413[m latest changes
+[31m|[m * [33m719e115[m latest changes
+[31m|[m * [33mb7f9af0[m fix resume parsing accuracy
+[31m|[m * [33m970e695[m fix resume parsing accuracy
+[31m|[m * [33mb65ec3a[m add pdf bridge route
+[31m|[m * [33mce4e30a[m fix pdf forwarding
+[31m|[m * [33md74d3f6[m remove node_modules and fix gitignore
+[31m|[m * [33m8d4491b[m fix upload limit
+[31m|[m * [33m7aa5f6a[m updated feature
+[31m|[m[31m/[m  
+* [33m3c493f2[m Remove .env and add to gitignore
+[32m|[m * [33m9b76f01[m[33m ([m[1;35mrefs/stash[m[33m)[m WIP on main: 5f029c8 first commit
+[32m|[m[32m/[m  
+* [33m0e769cf[m first commit
+* [33mbe344a5[m updated feature
+* [33m78ebdde[m first commit
+* [33m7aacddd[m first commit
+* [33mac53a58[m first commit

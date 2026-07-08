@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 // ✅ Load .env FIRST before anything else
 const __filename = fileURLToPath(import.meta.url);
@@ -156,6 +157,38 @@ app.get([
   '/user/history',
   '/auth/history',
 ], optionalProtect, getUserBookingHistory);
+
+function servePdf(res, absolutePath, downloadName) {
+  if (!absolutePath) {
+    res.status(404).json({ message: 'File path not configured' });
+    return;
+  }
+
+  if (!fs.existsSync(absolutePath)) {
+    res.status(404).json({ message: 'File not found' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${downloadName}"`);
+  res.sendFile(absolutePath);
+}
+
+const DEFAULT_PRIVACY_POLICY_PATH =
+  'c:\\\\Users\\\\yashk\\\\AppData\\\\Local\\\\Packages\\\\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\\\\LocalState\\\\sessions\\\\62D05ED126B5EABC91F74BBA185809C3E2229722\\\\transfers\\\\2026-27\\\\PRIVACY POLICY.pdf';
+const DEFAULT_TERMS_PATH =
+  'c:\\\\Users\\\\yashk\\\\Downloads\\\\TERMS AND CONDITIONS.pdf';
+
+const privacyPolicyPath = String(process.env.PRIVACY_POLICY_PDF_PATH || DEFAULT_PRIVACY_POLICY_PATH);
+const termsPath = String(process.env.TERMS_AND_CONDITIONS_PDF_PATH || DEFAULT_TERMS_PATH);
+
+app.get('/api/legal/privacy-policy', (req, res) => {
+  servePdf(res, privacyPolicyPath, 'privacy-policy.pdf');
+});
+
+app.get('/api/legal/terms-and-conditions', (req, res) => {
+  servePdf(res, termsPath, 'terms-and-conditions.pdf');
+});
 
 // 404 handler
 app.use((req, res) => {
