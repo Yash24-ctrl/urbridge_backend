@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -246,44 +246,76 @@ function extractMultipartBoundary(contentType = "") {
 
 function parseMultipartParts(bodyBuffer, boundary) {
   const parts = new Map();
-  const bodyText = bodyBuffer.toString("latin1");
-  const boundaryMarker = `--${boundary}`;
-  const rawParts = bodyText.split(boundaryMarker);
+  const boundaryBuffer = Buffer.from(`--${boundary}`);
+  let searchStart = 0;
 
-  for (const rawPart of rawParts) {
-    if (!rawPart || rawPart === "--" || rawPart === "--\r\n") {
-      continue;
+  while (searchStart < bodyBuffer.length) {
+    const boundaryStart = bodyBuffer.indexOf(boundaryBuffer, searchStart);
+
+    if (boundaryStart === -1) {
+      break;
     }
 
-    const withoutLeadingBreak = rawPart.startsWith("\r\n")
-      ? rawPart.slice(2)
-      : rawPart;
-    const normalizedPart = withoutLeadingBreak.endsWith("\r\n")
-      ? withoutLeadingBreak.slice(0, -2)
-      : withoutLeadingBreak;
-    const headerEndIndex = normalizedPart.indexOf("\r\n\r\n");
+    let partStart = boundaryStart + boundaryBuffer.length;
+
+    if (bodyBuffer.slice(partStart, partStart + 2).toString() === "--") {
+      break;
+    }
+
+    if (bodyBuffer[partStart] === 13 && bodyBuffer[partStart + 1] === 10) {
+      partStart += 2;
+    } else if (bodyBuffer[partStart] === 10) {
+      partStart += 1;
+    }
+
+    const nextBoundary = bodyBuffer.indexOf(boundaryBuffer, partStart);
+
+    if (nextBoundary === -1) {
+      break;
+    }
+
+    let partBuffer = bodyBuffer.slice(partStart, nextBoundary);
+
+    if (partBuffer.length >= 2 && partBuffer[partBuffer.length - 2] === 13 && partBuffer[partBuffer.length - 1] === 10) {
+      partBuffer = partBuffer.slice(0, -2);
+    } else if (partBuffer.length >= 1 && partBuffer[partBuffer.length - 1] === 10) {
+      partBuffer = partBuffer.slice(0, -1);
+    }
+
+    let headerEndIndex = partBuffer.indexOf(Buffer.from("\r\n\r\n"));
+    let headerSeparatorLength = 4;
 
     if (headerEndIndex === -1) {
+      headerEndIndex = partBuffer.indexOf(Buffer.from("\n\n"));
+      headerSeparatorLength = 2;
+    }
+
+    if (headerEndIndex === -1) {
+      searchStart = nextBoundary;
       continue;
     }
 
-    const headerText = normalizedPart.slice(0, headerEndIndex);
-    const contentText = normalizedPart.slice(headerEndIndex + 4);
-    const dispositionMatch = headerText.match(
-      /content-disposition:[^\r\n]*name="([^"]+)"(?:;[^\r\n]*filename="([^"]*)")?/i
-    );
+    const headerText = partBuffer.slice(0, headerEndIndex).toString("utf8");
+    const contentBuffer = partBuffer.slice(headerEndIndex + headerSeparatorLength);
+    const dispositionMatch = headerText.match(/content-disposition:[^\r\n]*name="([^"]+)"/i);
 
     if (!dispositionMatch) {
+      searchStart = nextBoundary;
       continue;
     }
 
-    parts.set(dispositionMatch[1], {
-      name: dispositionMatch[1],
-      filename: dispositionMatch[2] || "",
+    const filenameMatch = headerText.match(/filename="([^"]*)"/i) || headerText.match(/filename\*=UTF-8''([^;\r\n]+)/i);
+    const partName = dispositionMatch[1];
+
+    parts.set(partName, {
+      name: partName,
+      filename: filenameMatch?.[1] ? decodeURIComponent(filenameMatch[1]) : "",
       contentType:
         headerText.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() || "",
-      buffer: Buffer.from(contentText, "latin1"),
+      buffer: contentBuffer,
     });
+
+    searchStart = nextBoundary;
   }
 
   return parts;
@@ -306,7 +338,7 @@ async function readUploadedPdfFromRequest(req) {
     MAX_PDF_UPLOAD_BYTES + 1024 * 1024
   );
   const multipartParts = parseMultipartParts(requestBody, boundary);
-  const uploadedPdf = multipartParts.get("pdf");
+  const uploadedPdf = multipartParts.get("pdf") || [...multipartParts.values()].find((part) => part.filename || /pdf/i.test(part.contentType));
 
   if (!uploadedPdf || !Buffer.isBuffer(uploadedPdf.buffer) || uploadedPdf.buffer.length === 0) {
     throw createHttpError("No PDF file provided", 400);
