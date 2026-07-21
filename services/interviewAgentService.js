@@ -315,19 +315,37 @@ function fallbackQuestion({ config, difficulty, isFirstQuestion, transcript = []
 // Answer evaluation
 // ---------------------------------------------------------------------------
 
+function isNoScoreAnswer(answer) {
+  const normalized = String(answer || '').trim().toLowerCase();
+  if (!normalized) return true;
+
+  const compact = normalized.replace(/[^a-z0-9]/g, '');
+  return [
+    'na',
+    'no',
+    'none',
+    'nil',
+    'null',
+    'noanswer',
+    'notapplicable',
+    'notavailable',
+  ].includes(compact);
+}
+
 /**
  * Evaluates a candidate's answer and returns the scoring delta to apply
  * to knowledgeScore, plus feedback used internally and for the final report.
  *
- * @returns {Promise<{correctness:number, scoreDelta:number, feedback:string, flags:string[]}>}
+ * @returns {Promise<{correctness:number, scoreDelta:number, feedback:string, flags:string[], noScore?:boolean}>}
  */
 async function evaluateAnswer({ question, topic, answer, config, knowledgeScore }) {
-  if (!answer || !answer.trim()) {
+  if (isNoScoreAnswer(answer)) {
     return {
       correctness: 0,
       scoreDelta: -5,
-      feedback: 'No answer provided.',
-      flags: ['no_answer'],
+      feedback: 'No scorable answer provided.',
+      flags: ['no_answer', 'no_score_placeholder'],
+      noScore: true,
     };
   }
 
@@ -353,6 +371,7 @@ Grade the answer and return the JSON.`;
       scoreDelta: clampNumber(result.scoreDelta, -10, 10, 0),
       feedback: result.feedback || '',
       flags: Array.isArray(result.flags) ? result.flags : [],
+      noScore: false,
     };
   } catch (err) {
     return fallbackEvaluation(answer);
@@ -363,9 +382,9 @@ function fallbackEvaluation(answer) {
   // Very rough heuristic fallback: longer, non-trivial answers score modestly positive.
   const length = answer.trim().length;
   if (length < 15) {
-    return { correctness: 20, scoreDelta: -5, feedback: 'Answer was too brief to evaluate fully.', flags: ['incomplete'] };
+    return { correctness: 20, scoreDelta: -5, feedback: 'Answer was too brief to evaluate fully.', flags: ['incomplete'], noScore: false };
   }
-  return { correctness: 60, scoreDelta: 2, feedback: 'Answer recorded; automatic evaluation unavailable.', flags: [] };
+  return { correctness: 60, scoreDelta: 2, feedback: 'Answer recorded; automatic evaluation unavailable.', flags: [], noScore: false };
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -408,5 +427,6 @@ export {
   resolveEffectiveDifficulty,
   generateNextQuestion,
   evaluateAnswer,
+  isNoScoreAnswer,
   shouldEndInterview,
 };

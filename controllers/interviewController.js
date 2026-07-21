@@ -4,6 +4,7 @@ import {
   applyScoreDelta,
   generateNextQuestion,
   evaluateAnswer,
+  isNoScoreAnswer,
   shouldEndInterview,
 } from '../services/interviewAgentService.js';
 
@@ -135,7 +136,9 @@ async function submitAnswer(req, res) {
       scoreDelta: evaluation.scoreDelta,
       feedback: evaluation.feedback,
       flags: evaluation.flags,
+      noScore: evaluation.noScore === true,
     };
+    pending.skipped = evaluation.noScore === true;
 
     // 2. Update running state
     session.knowledgeScore = applyScoreDelta(session.knowledgeScore, evaluation.scoreDelta);
@@ -351,11 +354,11 @@ async function buildBasicReport(session) {
   const existingReport = await InterviewReport.findOne({ session: session._id });
   if (existingReport) return existingReport;
 
-  const answered = session.transcript.filter((t) => t.answeredAt && String(t.answer || '').trim());
+  const answered = session.transcript.filter((t) => t.answeredAt && !t.evaluation?.noScore && !isNoScoreAnswer(t.answer));
   const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
 
   const overallScore = Math.round(avg(answered.map((t) => t.evaluation?.correctness || 0)));
-  const answeredWell = answered.filter((t) => (t.evaluation?.correctness || 0) >= 70).length;
+  const questionsAsked = session.transcript.filter((t) => t.question).length;
   const roleLabel = session.config.customRole || session.config.role;
   const interviewTurns = answered.map((turn, index) => ({
     question: turn.question || `Question ${index + 1}`,
@@ -381,10 +384,11 @@ async function buildBasicReport(session) {
     weakAreas: session.weakTopics,
     recommendedTopics: session.weakTopics,
     summary: answered.length
-      ? `You answered ${answeredWell}/${answered.length} questions well. Review the detailed answer feedback below to improve your next attempt.`
+      ? `You submitted answers for ${answered.length}/${questionsAsked || answered.length} questions. Review the detailed answer feedback below to improve your next attempt.`
       : 'Time is up. No submitted answers were available for scoring in this attempt.',
     questionsCount: answered.length,
-    questionsAnsweredWell: answeredWell,
+    questionsAsked,
+    questionsAnsweredWell: 0,
     interviewTurns,
   });
 

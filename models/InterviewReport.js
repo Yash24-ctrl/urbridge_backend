@@ -30,9 +30,10 @@ const InterviewReportSchema = new mongoose.Schema(
     weakAreas: [{ type: String }],
     recommendedTopics: [{ type: String }],
 
-    summary: { type: String }, // short AI-written overall narrative, e.g. "7/10 questions answered well..."
+    summary: { type: String }, // short AI-written overall narrative, e.g. "7/8 answers submitted..."
 
     questionsCount: { type: Number },
+    questionsAsked: { type: Number },
     questionsAnsweredWell: { type: Number },
 
     interviewTurns: [

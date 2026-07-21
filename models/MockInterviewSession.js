@@ -26,6 +26,7 @@ const TranscriptEntrySchema = new mongoose.Schema(
       scoreDelta: { type: Number }, // +8 / -7 style delta applied to knowledgeScore
       feedback: { type: String }, // short AI feedback used internally / for report
       flags: [{ type: String }], // e.g. ["low_confidence", "incorrect_concept"]
+      noScore: { type: Boolean, default: false },
     },
   },
   { _id: false, timestamps: false }
