@@ -253,16 +253,20 @@ function buildCalendarEventBody({
   startDateTime,
   timezone,
 }) {
-  return {
-    summary: 'AI Counselling Session',
-    description: [
+  const descriptionLines = Array.isArray(bookingDetails.calendarDescriptionLines)
+    ? bookingDetails.calendarDescriptionLines
+    : [
       'Counselling session booked through AI Counselling Portal',
       `Counsellor: ${counselorName}, ${counselorTitle}`,
       `Student: ${bookingDetails.userName}`,
       `Email: ${bookingDetails.userEmail}`,
       `Phone: ${bookingDetails.userPhone || 'Not provided'}`,
       `Help needed: ${bookingDetails.helpWith || 'Not provided'}`,
-    ].join('\n'),
+    ];
+
+  return {
+    summary: bookingDetails.calendarSummary || 'AI Counselling Session',
+    description: descriptionLines.join('\n'),
     start: {
       dateTime: startDateTime,
       timeZone: timezone,
@@ -277,7 +281,7 @@ function buildCalendarEventBody({
     guestsCanSeeOtherGuests: true,
     conferenceData: {
       createRequest: {
-        requestId: `counseling-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        requestId: `${bookingDetails.calendarRequestPrefix || "counseling"}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         conferenceSolutionKey: {
           type: 'hangoutsMeet',
         },
@@ -419,3 +423,4 @@ async function _createGoogleMeetBookingInner(bookingDetails) {
     hostType: selectedCalendarTarget.hostType,
   };
 }
+

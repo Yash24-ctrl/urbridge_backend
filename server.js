@@ -19,6 +19,7 @@ import authRoutes from './routes/authRoutes.js';
 import resumeRoutes from './routes/resumeRoutes.js';
 import counselingRoutes from './routes/counselingRoutes.js';
 import interviewRoutes from './routes/interviewRoutes.js';
+import realInterviewRoutes from './routes/realInterviewRoutes.js';
 import {
   createCounselingBooking,
   getAvailableSlots,
@@ -95,6 +96,8 @@ app.use('/api/counselling', counselingRoutes);
 app.use('/api/user/counseling', counselingRoutes);
 app.use('/api/user/counselling', counselingRoutes);
 app.use('/api/interview', interviewRoutes);
+app.use('/api/real-interview', realInterviewRoutes);
+app.use('/api/user/real-interview', realInterviewRoutes);
 app.use('/user', authRoutes);
 app.use('/auth', authRoutes);
 app.use('/resume', resumeRoutes);
@@ -103,6 +106,8 @@ app.use('/counselling', counselingRoutes);
 app.use('/user/counseling', counselingRoutes);
 app.use('/user/counselling', counselingRoutes);
 app.use('/interview', interviewRoutes);
+app.use('/real-interview', realInterviewRoutes);
+app.use('/user/real-interview', realInterviewRoutes);
 
 app.get([
   '/api/user/counseling/slots',
