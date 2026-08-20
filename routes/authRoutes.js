@@ -7,6 +7,10 @@ import {
   linkedinAuth,
   linkedinCallback,
   getMe,
+  verifyOtp,
+  resendOtp,
+  forgotPassword,
+  resetPassword,
 } from '../controllers/authController.js';
 import {
   createCounselingBooking,
@@ -14,12 +18,35 @@ import {
   getUserBookingHistory,
 } from '../controllers/counselingController.js';
 import { optionalProtect, protect } from '../middleware/authMiddleware.js';
+import { rateLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
+const registerLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  message: 'Too many registration requests. Please try again after 15 minutes.'
+});
+
+const verifyOtpLimiter = rateLimiter({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 15,
+  message: 'Too many verification attempts. Please try again after 5 minutes.'
+});
+
+const resendOtpLimiter = rateLimiter({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 5,
+  message: 'Too many resend requests. Please try again after 5 minutes.'
+});
+
 // Public routes
-router.post('/register', register);
+router.post('/register', registerLimiter, register);
 router.post('/login', login);
+router.post('/verify-otp', verifyOtpLimiter, verifyOtp);
+router.post('/resend-otp', resendOtpLimiter, resendOtp);
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password/:token', resetPassword);
 router.post('/google-login', googleLogin);
 router.post('/google-register', googleRegister);
 router.get('/linkedin', linkedinAuth);

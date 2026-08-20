@@ -2,6 +2,8 @@ import ResumeProfile from '../models/ResumeProfile.js';
 import ResumeAnalysis from '../models/ResumeAnalysis.js';
 import { sanitizeResumePayload } from '../utils/resumePayload.js';
 import { analyzeResumeProfile, analyzeExperiencedProfile } from '../services/resumeAnalyzerService.js';
+// Subscription usage tracking temporarily disabled for testing.
+// import { markFeatureUsed } from '../middleware/featureAccessMiddleware.js';
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:5001/predict';
 
@@ -123,6 +125,9 @@ export const analyzeManualResume = async (req, res) => {
       strongPoints: analysisResult.strongPoints || [],
       profileSnapshot: buildProfileSnapshot(profileData),
     });
+
+    // Subscription usage tracking temporarily disabled for testing.
+    // await markFeatureUsed(userId, 'ats_checker');
 
     res.status(200).json({
       score: analysisResult.score,

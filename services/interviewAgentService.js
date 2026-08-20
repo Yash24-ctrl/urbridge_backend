@@ -317,7 +317,12 @@ function fallbackQuestion({ config, difficulty, isFirstQuestion, transcript = []
 
 function isNoScoreAnswer(answer) {
   const normalized = String(answer || '').trim().toLowerCase();
-  if (!normalized) return true;
+  return !normalized;
+}
+
+function isZeroScorePlaceholder(answer) {
+  const normalized = String(answer || '').trim().toLowerCase();
+  if (!normalized) return false;
 
   const compact = normalized.replace(/[^a-z0-9]/g, '');
   return [
@@ -330,6 +335,40 @@ function isNoScoreAnswer(answer) {
     'notapplicable',
     'notavailable',
   ].includes(compact);
+}
+
+function isGibberishAnswer(answer) {
+  const normalized = String(answer || '').trim().toLowerCase();
+  if (!normalized) return false;
+
+  const compactWords = normalized
+    .replace(/[^a-z\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!compactWords.length) return true;
+  if (compactWords.length > 3) return false;
+
+  return compactWords.every((word) => {
+    const vowels = (word.match(/[aeiou]/g) || []).length;
+    const consonants = (word.match(/[bcdfghjklmnpqrstvwxyz]/g) || []).length;
+    const repeatedChars = /(.)\1{3,}/.test(word);
+    const longNoVowels = word.length >= 5 && vowels === 0;
+    const consonantHeavy = word.length >= 7 && consonants >= vowels * 4;
+    const keyboardNoise = word.length >= 8 && !/\b(project|skill|team|api|data|resume|role|user|client|work|code|design|built|create|solve|interview)\b/i.test(word);
+
+    return repeatedChars || longNoVowels || consonantHeavy || keyboardNoise;
+  });
+}
+
+function zeroScoreEvaluation(feedback, flags = []) {
+  return {
+    correctness: 0,
+    scoreDelta: -5,
+    feedback,
+    flags,
+    noScore: false,
+  };
 }
 
 /**
@@ -347,6 +386,14 @@ async function evaluateAnswer({ question, topic, answer, config, knowledgeScore 
       flags: ['no_answer', 'no_score_placeholder'],
       noScore: true,
     };
+  }
+
+  if (isZeroScorePlaceholder(answer)) {
+    return zeroScoreEvaluation('Placeholder answers like N/A cannot be scored as interview responses.', ['placeholder_answer', 'incomplete']);
+  }
+
+  if (isGibberishAnswer(answer)) {
+    return zeroScoreEvaluation('The answer does not contain meaningful interview content, so it scored 0%.', ['gibberish_answer', 'incomplete']);
   }
 
   const systemPrompt = `You are grading a mock interview answer.
@@ -374,17 +421,101 @@ Grade the answer and return the JSON.`;
       noScore: false,
     };
   } catch (err) {
-    return fallbackEvaluation(answer);
+    return fallbackEvaluation({ question, topic, answer });
   }
 }
 
-function fallbackEvaluation(answer) {
-  // Very rough heuristic fallback: longer, non-trivial answers score modestly positive.
-  const length = answer.trim().length;
-  if (length < 15) {
-    return { correctness: 20, scoreDelta: -5, feedback: 'Answer was too brief to evaluate fully.', flags: ['incomplete'], noScore: false };
+function fallbackEvaluation({ question, topic, answer }) {
+  const result = scoreAnswerLocally({ question, topic, answer });
+  return {
+    correctness: result.correctness,
+    scoreDelta: result.scoreDelta,
+    feedback: result.feedback,
+    flags: result.flags,
+    noScore: false,
+  };
+}
+
+function scoreAnswerLocally({ question = '', topic = '', answer = '' }) {
+  const cleanAnswer = String(answer || '').trim();
+  const wordCount = cleanAnswer.split(/\s+/).filter(Boolean).length;
+  const answerTokens = keywordSet(cleanAnswer);
+  const promptTokens = keywordSet(`${question} ${topic}`);
+  const overlap = [...promptTokens].filter((word) => answerTokens.has(word)).length;
+  const relevanceRatio = promptTokens.size ? overlap / promptTokens.size : 0;
+
+  let score = 18;
+  const flags = [];
+
+  if (wordCount < 4) {
+    score = 12;
+    flags.push('incomplete');
+  } else if (wordCount < 12) {
+    score += 14;
+    flags.push('brief_answer');
+  } else if (wordCount < 35) {
+    score += 28;
+  } else if (wordCount < 80) {
+    score += 42;
+  } else {
+    score += 50;
   }
-  return { correctness: 60, scoreDelta: 2, feedback: 'Answer recorded; automatic evaluation unavailable.', flags: [], noScore: false };
+
+  if (relevanceRatio >= 0.35) score += 14;
+  else if (relevanceRatio >= 0.18) score += 8;
+  else if (promptTokens.size > 0) {
+    score -= 6;
+    flags.push('low_relevance');
+  }
+
+  if (/\b(because|therefore|so that|for example|for instance|result|impact|improve|reduced|increased|solved|built|created|implemented|designed|optimized|measured)\b/i.test(cleanAnswer)) {
+    score += 8;
+  }
+
+  if (/\b(i don't know|dont know|not sure|maybe|i guess|no idea|can't answer|cannot answer)\b/i.test(cleanAnswer)) {
+    score -= 18;
+    flags.push('low_confidence');
+  }
+
+  if (/[0-9%]/.test(cleanAnswer) || /\b(project|team|user|client|database|api|model|resume|role|skill|experience)\b/i.test(cleanAnswer)) {
+    score += 5;
+  }
+
+  const correctness = clampNumber(score, 0, 100, 35);
+  const scoreDelta = Math.round((correctness - 50) / 8);
+
+  if (correctness >= 78) flags.push('strong_answer');
+  if (correctness < 45 && !flags.includes('incomplete')) flags.push('needs_detail');
+
+  return {
+    correctness,
+    scoreDelta: clampNumber(scoreDelta, -10, 10, 0),
+    feedback: fallbackFeedback(correctness),
+    flags,
+  };
+}
+
+function fallbackFeedback(score) {
+  if (score >= 78) return 'Strong answer with useful detail and clear relevance to the question.';
+  if (score >= 62) return 'Good answer, but adding more specific examples or measurable impact would make it stronger.';
+  if (score >= 42) return 'Answer is partially clear but needs more structure, detail, and direct relevance.';
+  return 'Answer is too brief or unclear, so it needs more explanation before it can score well.';
+}
+
+function keywordSet(value) {
+  const stopWords = new Set([
+    'the', 'and', 'for', 'that', 'this', 'with', 'you', 'your', 'about', 'what',
+    'how', 'why', 'can', 'could', 'would', 'should', 'tell', 'describe', 'explain',
+    'from', 'into', 'have', 'has', 'had', 'are', 'was', 'were', 'will', 'role',
+  ]);
+
+  return new Set(
+    String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((word) => word.length > 2 && !stopWords.has(word))
+  );
 }
 
 function clampNumber(value, min, max, fallback) {

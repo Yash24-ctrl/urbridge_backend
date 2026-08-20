@@ -7,6 +7,8 @@ import {
   isNoScoreAnswer,
   shouldEndInterview,
 } from '../services/interviewAgentService.js';
+// Subscription usage tracking temporarily disabled for testing.
+// import { markFeatureUsed } from '../middleware/featureAccessMiddleware.js';
 
 const STARTING_KNOWLEDGE_SCORE = 50;
 
@@ -84,6 +86,8 @@ async function startInterview(req, res) {
       difficultyAtAsk: session.knowledgeScore,
     });
     await session.save();
+    // Subscription usage tracking temporarily disabled for testing.
+    // await markFeatureUsed(userId, 'ai_interview');
 
     return res.status(201).json({
       sessionId: session._id,

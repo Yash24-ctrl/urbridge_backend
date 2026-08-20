@@ -1,19 +1,14 @@
-﻿import nodemailer from 'nodemailer';
+import nodemailer from 'nodemailer';
 
-const DEFAULT_REAL_INTERVIEWER_EMAIL = 'ravi.shah@neuronet.in';
+const BOOKING_NOTIFICATION_EMAIL = 'neuronetsystems01@gmail.com';
+const DEFAULT_REAL_INTERVIEWER_EMAIL = BOOKING_NOTIFICATION_EMAIL;
 import { isValidEmail, normalizeEmailValue } from '../utils/emailValidation.js';
 
 const COUNSELLOR_NAME = 'Ravi Shah';
 const COUNSELLOR_TITLE = 'AI Expert Counsellor';
 
 function getCounselorEmail() {
-  return normalizeEmailValue(
-    process.env.COUNSELOR_EMAIL?.trim()
-    || process.env.COUNSELLOR_EMAIL?.trim()
-    || process.env.COUNSELOR_MAIL?.trim()
-    || process.env.COUNSELLOR_MAIL?.trim()
-    || ''
-  );
+  return normalizeEmailValue(BOOKING_NOTIFICATION_EMAIL);
 }
 
 function getEmailConfig() {
@@ -85,6 +80,41 @@ function assertMailAccepted(label, recipient, info) {
   }
 }
 
+function uniqueValidEmails(values) {
+  return [...new Set(
+    values
+      .map((value) => normalizeEmailValue(value))
+      .filter((value) => isValidEmail(value))
+  )];
+}
+
+function makeSafePdfFilename(value) {
+  const cleaned = String(value || 'resume.pdf')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .trim() || 'resume.pdf';
+
+  return /\.pdf$/i.test(cleaned) ? cleaned : `${cleaned}.pdf`;
+}
+
+function decodeResumePdf(base64Value, fileName) {
+  const normalized = String(base64Value || '').replace(/^data:application\/pdf;base64,/i, '').trim();
+
+  if (!normalized) {
+    throw new Error('Resume PDF attachment is missing.');
+  }
+
+  const content = Buffer.from(normalized, 'base64');
+  if (content.length === 0 || content.subarray(0, 4).toString() !== '%PDF') {
+    throw new Error('Resume PDF attachment is invalid.');
+  }
+
+  return {
+    filename: makeSafePdfFilename(fileName),
+    content,
+    contentType: 'application/pdf',
+  };
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -146,10 +176,7 @@ function buildCounselorEmailHtml(details) {
 export async function sendBookingConfirmationEmail(details) {
   const config = assertEmailConfig();
   const transporter = createTransporter(config);
-  const selectedCounsellorEmail = normalizeEmailValue(details.counsellorEmail);
-  const counsellorRecipient = isValidEmail(selectedCounsellorEmail)
-    ? selectedCounsellorEmail
-    : config.counselorEmail;
+  const counsellorRecipient = BOOKING_NOTIFICATION_EMAIL;
   const shouldNotifyCounsellor = isValidEmail(counsellorRecipient);
 
   const userMail = {
@@ -229,29 +256,45 @@ export async function verifyEmailConfig() {
   }
 }
 
+export async function sendResetPasswordEmail(email, resetLink) {
+  const config = assertEmailConfig();
+  const transporter = createTransporter(config);
+  const safeResetLink = escapeHtml(resetLink);
+
+  const info = await transporter.sendMail({
+    from: config.from,
+    to: email,
+    subject: 'Reset your UrBridgeAI password',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 620px; margin: 0 auto; color: #0f172a;">
+        <h2 style="color: #0d1b3e;">Reset your password</h2>
+        <p>Hello,</p>
+        <p>We received a request to reset your UrBridgeAI password. Use the secure link below to set a new password.</p>
+        <p>
+          <a href="${safeResetLink}" style="background: #1455d9; color: white; padding: 12px 18px; text-decoration: none; border-radius: 8px; display: inline-block;">
+            Set new password
+          </a>
+        </p>
+        <p><strong>Direct reset link:</strong> <a href="${safeResetLink}">${safeResetLink}</a></p>
+        <p style="color: #64748b;">This link expires in 1 hour. If you did not request this, you can safely ignore this email.</p>
+      </div>
+    `,
+  });
+
+  assertMailAccepted('Password reset', email, info);
+  return info;
+}
+
 export async function sendRealInterviewBookingEmail(details) {
   const config = assertEmailConfig();
   const transporter = createTransporter(config);
-  const interviewerEmail = normalizeEmailValue(
-    details.interviewerEmail
-    || process.env.INTERVIEWER_EMAIL
-    || process.env.REAL_INTERVIEWER_EMAIL
-    || DEFAULT_REAL_INTERVIEWER_EMAIL
-    || config.counselorEmail
-  );
+  const interviewerRecipients = uniqueValidEmails([BOOKING_NOTIFICATION_EMAIL]);
 
-  if (!isValidEmail(interviewerEmail)) {
-    throw new Error('Interviewer email is not configured. Set INTERVIEWER_EMAIL or COUNSELOR_EMAIL.');
+  if (interviewerRecipients.length === 0) {
+    throw new Error(`Interviewer email is not configured. Booking notifications must go to ${BOOKING_NOTIFICATION_EMAIL}.`);
   }
 
-  const attachments = [];
-  if (details.resumePdfBase64 && details.resumeFileName) {
-    attachments.push({
-      filename: details.resumeFileName,
-      content: Buffer.from(details.resumePdfBase64, 'base64'),
-      contentType: 'application/pdf',
-    });
-  }
+  const attachments = [decodeResumePdf(details.resumePdfBase64, details.resumeFileName)];
 
   const interviewerHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; color: #0f172a;">
@@ -298,7 +341,7 @@ export async function sendRealInterviewBookingEmail(details) {
     }),
     transporter.sendMail({
       from: config.from,
-      to: interviewerEmail,
+      to: interviewerRecipients.join(', '),
       subject: 'New UrBridgeAI Real Interview Booking',
       html: interviewerHtml,
       attachments,
@@ -308,15 +351,56 @@ export async function sendRealInterviewBookingEmail(details) {
   const errors = [];
   if (studentResult.status === 'rejected') {
     errors.push(`Student email failed: ${studentResult.reason?.message || studentResult.reason}`);
+  } else {
+    try {
+      assertMailAccepted('Student confirmation', details.userEmail, studentResult.value);
+    } catch (error) {
+      errors.push(error.message);
+    }
   }
   if (interviewerResult.status === 'rejected') {
     errors.push(`Interviewer email failed: ${interviewerResult.reason?.message || interviewerResult.reason}`);
+  } else {
+    for (const recipient of interviewerRecipients) {
+      try {
+        assertMailAccepted('Interviewer notification', recipient, interviewerResult.value);
+      } catch (error) {
+        errors.push(error.message);
+      }
+    }
   }
   if (errors.length > 0) {
     throw new Error(errors.join(' '));
   }
 
   return { studentInfo: studentResult.value, interviewerInfo: interviewerResult.value };
+}
+
+export async function sendOtpEmail(toEmail, otp) {
+  const config = assertEmailConfig();
+  const transporter = createTransporter(config);
+
+  const otpMail = {
+    from: config.from,
+    to: toEmail,
+    subject: 'Verify your UrBridge account',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 32px; color: #1e293b; background-color: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0;">
+        <h2 style="color: #0d1b3e; font-size: 24px; font-weight: 750; margin-bottom: 16px; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px;">Verify your email</h2>
+        <p style="font-size: 16px; line-height: 1.5; color: #334155;">Use the following verification code to complete your UrBridge account setup:</p>
+        <div style="margin: 28px 0; text-align: center;">
+          <span style="font-family: monospace; font-size: 38px; font-weight: 750; letter-spacing: 6px; color: #0d1b3e; background: #e2e8f0; padding: 12px 28px; border-radius: 8px; display: inline-block; border: 1px solid #cbd5e1;">${otp}</span>
+        </div>
+        <p style="font-size: 15px; line-height: 1.5; color: #475569;">This code will expire in 5 minutes.</p>
+        <p style="font-size: 13px; line-height: 1.5; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 24px;">If you didn't request this code, you can safely ignore this email.</p>
+        <p style="font-size: 14px; font-weight: 700; color: #0d1b3e; margin-top: 8px;">UrBridge</p>
+      </div>
+    `,
+  };
+
+  const info = await transporter.sendMail(otpMail);
+  assertMailAccepted('OTP verification', toEmail, info);
+  return info;
 }
 
 

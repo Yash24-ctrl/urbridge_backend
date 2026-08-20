@@ -4,24 +4,11 @@ import { isValidEmail, normalizeEmailValue } from '../utils/emailValidation.js';
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 const COUNSELLOR_NAME = 'Ravi Shah';
 const COUNSELLOR_TITLE = 'AI Expert Counsellor';
+const BOOKING_NOTIFICATION_EMAIL = 'neuronetsystems01@gmail.com';
 const SESSION_DURATION_MINUTES = 60;
 
 function getCounselorEmail(requestedEmail) {
-  const selectedEmail = normalizeEmailValue(requestedEmail);
-
-  if (isValidEmail(selectedEmail)) {
-    return selectedEmail;
-  }
-
-  const configuredEmail = normalizeEmailValue(
-    process.env.COUNSELOR_EMAIL?.trim()
-    || process.env.COUNSELLOR_EMAIL?.trim()
-    || process.env.COUNSELOR_MAIL?.trim()
-    || process.env.COUNSELLOR_MAIL?.trim()
-    || ''
-  );
-
-  return isValidEmail(configuredEmail) ? configuredEmail : '';
+  return normalizeEmailValue(BOOKING_NOTIFICATION_EMAIL);
 }
 
 function getGoogleCalendarConfig() {
@@ -207,11 +194,12 @@ function getGoogleOAuthErrorMessage(error) {
   );
 }
 
-function buildEventAttendees(bookingDetails, counselorEmail) {
+function buildEventAttendees(bookingDetails, counselorEmail, hostCalendarId) {
+  const normalizedHostCalendarId = normalizeEmailValue(hostCalendarId);
   const attendeeEmails = [
     normalizeEmailValue(bookingDetails.userEmail),
     normalizeEmailValue(counselorEmail),
-  ].filter((email) => isValidEmail(email));
+  ].filter((email) => isValidEmail(email) && email !== normalizedHostCalendarId);
 
   return [...new Set(attendeeEmails)].map((email) => ({ email }));
 }
@@ -225,11 +213,6 @@ function buildCalendarTargets(calendarId, counselorEmail) {
       hostType: 'selected-counsellor',
     });
   }
-
-  targets.push({
-    calendarId,
-    hostType: 'configured-calendar',
-  });
 
   const seenCalendarIds = new Set();
   return targets.filter((target) => {
@@ -332,14 +315,21 @@ async function _createGoogleMeetBookingInner(bookingDetails) {
   const counselorEmail = getCounselorEmail(bookingDetails.counsellorEmail || bookingDetails.counselorEmail);
   const counselorName = bookingDetails.counsellorName || bookingDetails.counselorName || COUNSELLOR_NAME;
   const counselorTitle = bookingDetails.counsellorTitle || bookingDetails.counselorTitle || COUNSELLOR_TITLE;
-  const attendees = buildEventAttendees(bookingDetails, counselorEmail);
   const calendarTargets = buildCalendarTargets(calendarId, counselorEmail);
+
+  if (calendarTargets.length === 0) {
+    return buildFallbackMeetBooking(
+      bookingDetails,
+      'Counsellor host calendar is not configured.'
+    );
+  }
 
   let insertResponse;
   let selectedCalendarTarget;
   let lastInsertError;
 
   for (const calendarTarget of calendarTargets) {
+    const attendees = buildEventAttendees(bookingDetails, counselorEmail, calendarTarget.calendarId);
     const eventBody = buildCalendarEventBody({
       attendees,
       bookingDetails,
@@ -380,7 +370,7 @@ async function _createGoogleMeetBookingInner(bookingDetails) {
   if (!insertResponse || !selectedCalendarTarget) {
     return buildFallbackMeetBooking(
       bookingDetails,
-      `Google Calendar event creation failed: ${lastInsertError?.message || 'No calendar target accepted the event'}`
+      `Google Calendar event creation failed for counsellor host ${counselorEmail}: ${lastInsertError?.message || 'No calendar target accepted the event'}`
     );
   }
 

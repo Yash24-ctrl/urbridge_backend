@@ -3,6 +3,8 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { protect } from "../middleware/authMiddleware.js";
+// Subscription lock temporarily disabled for testing.
+// import { requireFeatureAccess } from "../middleware/featureAccessMiddleware.js";
 import {
   analyzeManualResume,
   saveProfile,
@@ -37,6 +39,8 @@ function createHttpError(message, statusCode = 400) {
 }
 
 // Resume analysis routes (protected)
+// Subscription lock temporarily disabled for testing.
+// router.post("/analyze", protect, requireFeatureAccess("ats_checker"), analyzeManualResume);
 router.post("/analyze", protect, analyzeManualResume);
 router.post("/profile", protect, saveProfile);
 router.get("/profile", protect, getProfile);

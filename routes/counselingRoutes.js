@@ -4,11 +4,15 @@ import {
   getAvailableSlots,
   getUserBookingHistory,
 } from '../controllers/counselingController.js';
-import { optionalProtect } from '../middleware/authMiddleware.js';
+import { optionalProtect, protect } from '../middleware/authMiddleware.js';
+// Subscription lock temporarily disabled for testing.
+// import { requireFeatureAccess } from '../middleware/featureAccessMiddleware.js';
 
 const router = express.Router();
 
-router.post('/book', optionalProtect, createCounselingBooking);
+// Subscription lock temporarily disabled for testing.
+// router.post('/book', protect, requireFeatureAccess('career_guidance'), createCounselingBooking);
+router.post('/book', protect, createCounselingBooking);
 router.get('/slots', getAvailableSlots);
 router.get('/history', optionalProtect, getUserBookingHistory);
 

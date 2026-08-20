@@ -4,6 +4,8 @@ import mongoose from 'mongoose';
 import { createGoogleMeetBooking } from '../services/googleCalendar.js';
 import { sendBookingConfirmationEmail } from '../services/emailService.js';
 import { isValidEmail, normalizeEmailValue } from '../utils/emailValidation.js';
+// Subscription usage tracking temporarily disabled for testing.
+// import { markFeatureUsed } from '../middleware/featureAccessMiddleware.js';
 
 const TIMEZONE = 'Asia/Calcutta';
 const TIME_SLOTS = ['10:00 AM', '12:00 PM', '02:00 PM', '04:00 PM', '06:00 PM'];
@@ -12,6 +14,7 @@ const SESSION_DURATION_MINUTES = 60;
 const DEFAULT_SLOT_DATE_WINDOW_DAYS = 31;
 const COUNSELLOR_NAME = 'Ravi Shah';
 const COUNSELLOR_TITLE = 'AI Expert Counsellor';
+const BOOKING_NOTIFICATION_EMAIL = 'neuronetsystems01@gmail.com';
 
 function getTimeZoneParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -410,8 +413,7 @@ export async function createCounselingBooking(req, res) {
     const timeSlot = String(req.body.timeSlot || '').trim();
     const helpWith = String(req.body.helpWith || req.body.message || '').trim();
     const counsellorName = String(req.body.counsellorName || req.body.counselorName || COUNSELLOR_NAME).trim() || COUNSELLOR_NAME;
-    const requestedCounsellorEmail = normalizeEmailValue(req.body.counsellorEmail || req.body.counselorEmail || '');
-    const counsellorEmail = isValidEmail(requestedCounsellorEmail) ? requestedCounsellorEmail : '';
+    const counsellorEmail = BOOKING_NOTIFICATION_EMAIL;
     const counsellorTitle = String(req.body.counsellorTitle || req.body.counselorTitle || COUNSELLOR_TITLE).trim() || COUNSELLOR_TITLE;
 
     console.info(`[${bookingLogId}] Booking request received`, {
@@ -539,6 +541,9 @@ export async function createCounselingBooking(req, res) {
       ...buildBookingPayload(booking),
       calendarLink: calendarBooking.calendarLink,
     };
+
+    // Subscription usage tracking temporarily disabled for testing.
+    // await markFeatureUsed(userId, 'career_guidance');
 
     try {
       const emailResult = await sendBookingConfirmationEmail(bookingPayload);

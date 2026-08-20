@@ -2,11 +2,18 @@
 import { createGoogleMeetBooking } from '../services/googleCalendar.js';
 import { sendRealInterviewBookingEmail } from '../services/emailService.js';
 import { isValidEmail, normalizeEmailValue } from '../utils/emailValidation.js';
+// Subscription usage tracking temporarily disabled for testing.
+// import { markFeatureUsed } from '../middleware/featureAccessMiddleware.js';
 
 const VALID_INTERVIEW_TYPES = new Set(['Technical', 'HR', 'Mixed']);
 const VALID_EXPERIENCE_LEVELS = new Set(['Fresher', '1-2 Years', '3+ Years']);
 const DEFAULT_TIMEZONE = 'Asia/Calcutta';
-const DEFAULT_INTERVIEWER_EMAIL = 'ravi.shah@neuronet.in';
+const BOOKING_NOTIFICATION_EMAIL = 'neuronetsystems01@gmail.com';
+const DEFAULT_INTERVIEWER_EMAIL = BOOKING_NOTIFICATION_EMAIL;
+
+function getRealInterviewRecipientEmail(body = {}) {
+  return normalizeEmailValue(BOOKING_NOTIFICATION_EMAIL);
+}
 
 function extractMeetingCode(meetLink) {
   return String(meetLink || '').split('/').filter(Boolean).pop() || '';
@@ -49,9 +56,7 @@ export async function createRealInterviewBooking(req, res) {
     const experienceLevel = String(req.body.experienceLevel || '').trim();
     const resumeFileName = String(req.body.resumeFileName || '').trim();
     const resumePdfBase64 = normalizePdfBase64(req.body.resumePdfBase64);
-    const interviewerEmail = normalizeEmailValue(
-      req.body.interviewerEmail || process.env.INTERVIEWER_EMAIL || process.env.REAL_INTERVIEWER_EMAIL || DEFAULT_INTERVIEWER_EMAIL || process.env.COUNSELOR_EMAIL || process.env.COUNSELLOR_EMAIL || ''
-    );
+    const interviewerEmail = getRealInterviewRecipientEmail(req.body);
 
     if (!userName || !userEmail || !userPhone || !date || !timeSlot || !interviewType || !experienceLevel || !resumeFileName || !resumePdfBase64) {
       return res.status(400).json({ message: 'Please provide name, email, 10 digit mobile number, resume PDF, interview type, experience level, date, and time slot.' });
@@ -135,15 +140,27 @@ export async function createRealInterviewBooking(req, res) {
     });
 
     const payload = buildBookingPayload(booking);
+    // Subscription usage tracking temporarily disabled for testing.
+    // await markFeatureUsed(req.user?._id || req.user?.id, 'personal_interview');
 
+    let emailResult = null;
     try {
-      await sendRealInterviewBookingEmail({
+      emailResult = await sendRealInterviewBookingEmail({
         ...payload,
         resumePdfBase64,
         interviewerEmail,
       });
     } catch (emailError) {
       console.error('Real interview email error:', emailError.message);
+      return res.status(502).json({
+        message: 'Real interview session was booked, but the counsellor email could not be sent. Please contact support to notify the counsellor.',
+        booking: payload,
+        meetLink,
+        googleMeetLink: meetLink,
+        meetingCode,
+        calendarEventId: payload.calendarEventId,
+        emailError: emailError.message,
+      });
     }
 
     return res.status(201).json({
@@ -153,6 +170,10 @@ export async function createRealInterviewBooking(req, res) {
       googleMeetLink: meetLink,
       meetingCode,
       calendarEventId: payload.calendarEventId,
+      email: {
+        studentAccepted: emailResult?.studentInfo?.accepted || [],
+        counsellorAccepted: emailResult?.interviewerInfo?.accepted || [],
+      },
     });
   } catch (error) {
     console.error('Create real interview booking error:', error);

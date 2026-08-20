@@ -20,12 +20,15 @@ import resumeRoutes from './routes/resumeRoutes.js';
 import counselingRoutes from './routes/counselingRoutes.js';
 import interviewRoutes from './routes/interviewRoutes.js';
 import realInterviewRoutes from './routes/realInterviewRoutes.js';
+import accessRoutes from './routes/accessRoutes.js';
 import {
   createCounselingBooking,
   getAvailableSlots,
   getUserBookingHistory,
 } from './controllers/counselingController.js';
-import { optionalProtect } from './middleware/authMiddleware.js';
+import { optionalProtect, protect } from './middleware/authMiddleware.js';
+// Subscription lock temporarily disabled for testing.
+// import { requireFeatureAccess } from './middleware/featureAccessMiddleware.js';
 
 // Connect to database
 connectDB();
@@ -90,6 +93,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/api/user', authRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/access', accessRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/counseling', counselingRoutes);
 app.use('/api/counselling', counselingRoutes);
@@ -145,7 +149,9 @@ app.post([
   '/counselling/book',
   '/user/book',
   '/auth/book',
-], optionalProtect, createCounselingBooking);
+// Subscription lock temporarily disabled for testing.
+// ], protect, requireFeatureAccess('career_guidance'), createCounselingBooking);
+], protect, createCounselingBooking);
 
 app.get([
   '/api/user/counseling/history',

@@ -47,6 +47,70 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    otpHash: {
+      type: String,
+      default: null,
+    },
+    otpExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    otpAttempts: {
+      type: Number,
+      default: 0,
+    },
+    otpLastSentAt: {
+      type: Date,
+      default: null,
+    },
+    passwordResetTokenHash: {
+      type: String,
+      default: null,
+    },
+    passwordResetExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    subscription: {
+      isActive: {
+        type: Boolean,
+        default: false,
+      },
+      planName: {
+        type: String,
+        default: '',
+      },
+      expiresAt: {
+        type: Date,
+        default: null,
+      },
+      razorpayCustomerId: {
+        type: String,
+        default: '',
+      },
+    },
+    usage: {
+      atsFreeUsed: {
+        type: Boolean,
+        default: false,
+      },
+      atsChecksCount: {
+        type: Number,
+        default: 0,
+      },
+      aiInterviewCount: {
+        type: Number,
+        default: 0,
+      },
+      careerGuidanceCount: {
+        type: Number,
+        default: 0,
+      },
+      personalInterviewCount: {
+        type: Number,
+        default: 0,
+      },
+    },
   },
   {
     timestamps: true,
@@ -63,6 +127,7 @@ userSchema.pre('save', async function (next) {
 
 // Compare password method
 userSchema.methods.comparePassword = async function (candidatePassword) {
+  if (!candidatePassword || !this.password) return false;
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
