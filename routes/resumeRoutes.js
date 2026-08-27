@@ -31,11 +31,67 @@ const MIN_PDF_TEXT_LENGTH = 50;
 const MAX_PDF_UPLOAD_BYTES = 10 * 1024 * 1024;
 const ML_SERVICE_PDF_URL =
   process.env.ML_SERVICE_PDF_URL || "http://127.0.0.1:5001/parse-pdf";
+const NOT_RESUME_PDF_ERROR =
+  "The PDF you uploaded does not look like a resume. Please upload a resume PDF.";
 
 function createHttpError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function isLikelyResumeText(text = "") {
+  const rawText = String(text || "").trim();
+  const normalized = rawText.toLowerCase().replace(/\s+/g, " ");
+
+  if (rawText.length < MIN_PDF_TEXT_LENGTH) {
+    return false;
+  }
+
+  const sectionSignals = [
+    /\b(curriculum vitae|resume|résumé)\b/i,
+    /\b(professional summary|profile summary|career objective|summary)\b/i,
+    /\b(work experience|professional experience|employment history|internship|internships)\b/i,
+    /\b(education|academic background|qualification|qualifications)\b/i,
+    /\b(technical skills|key skills|core skills|skills)\b/i,
+    /\b(projects|project experience|academic projects|personal projects)\b/i,
+    /\b(certifications|certificates|licenses)\b/i,
+  ].reduce((score, pattern) => score + (pattern.test(rawText) ? 1 : 0), 0);
+
+  const contactSignals = [
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i,
+    /(?:\+?\d[\s-]?){9,14}/,
+    /\b(linkedin\.com|github\.com)\b/i,
+  ].reduce((score, pattern) => score + (pattern.test(rawText) ? 1 : 0), 0);
+
+  const roleSignals = /\b(engineer|developer|analyst|scientist|manager|consultant|specialist|designer|tester|intern|trainee|associate|executive|coordinator|administrator|architect)\b/i.test(rawText) ? 1 : 0;
+
+  const skillSignals = [
+    "python",
+    "java",
+    "javascript",
+    "react",
+    "node",
+    "sql",
+    "excel",
+    "power bi",
+    "tableau",
+    "machine learning",
+    "html",
+    "css",
+    "mongodb",
+    "aws",
+    "docker",
+  ].reduce((score, skill) => score + (normalized.includes(skill) ? 1 : 0), 0);
+
+  const totalSignals = sectionSignals * 2 + contactSignals + roleSignals + Math.min(skillSignals, 4);
+  return sectionSignals >= 2 || (sectionSignals >= 1 && contactSignals >= 1) || totalSignals >= 5;
+}
+
+function rejectIfNotResumeText(text = "") {
+  if (!isLikelyResumeText(text)) {
+    throw createHttpError(NOT_RESUME_PDF_ERROR, 400);
+  }
 }
 
 // Resume analysis routes (protected)
@@ -60,24 +116,34 @@ async function callAIWithMessages(messages, extraPayload = {}) {
     key ? key.slice(0, 10) + "..." : "NOT FOUND"
   );
 
-  const response = await fetch(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openrouter/auto",
-        messages,
-        temperature: 0.1,
-        ...extraPayload,
-      }),
-    }
-  );
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  let response;
 
-  const data = await response.json();
+  try {
+    response = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "openrouter/auto",
+          messages,
+          temperature: 0.1,
+          ...extraPayload,
+        }),
+        signal: controller.signal,
+      }
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const responseText = await response.text();
+  const data = responseText ? JSON.parse(responseText) : {};
 
   console.log("OpenRouter Response:", JSON.stringify(data, null, 2));
 
@@ -480,6 +546,8 @@ router.post("/parse-resume", async (req, res) => {
       });
     }
 
+    rejectIfNotResumeText(textForParsing);
+
     const finalHeuristics = extractResumeDataHeuristically(textForParsing);
     let aiParsedData = {};
 
@@ -517,6 +585,14 @@ router.post("/parse-resume", async (req, res) => {
     const fallbackText = String(pdfText || "").trim();
 
     if (fallbackText.length >= MIN_PDF_TEXT_LENGTH) {
+      try {
+        rejectIfNotResumeText(fallbackText);
+      } catch (validationError) {
+        return res.status(validationError.statusCode || 400).json({
+          error: validationError.message || NOT_RESUME_PDF_ERROR,
+        });
+      }
+
       const heuristicOnly = extractResumeDataHeuristically(fallbackText);
       return res.json(normalizeParsedResumeData({}, heuristicOnly, fallbackText));
     }
@@ -543,6 +619,8 @@ router.post("/upload-pdf", async (req, res) => {
           "Could not extract text from PDF. Please make sure your PDF is not scanned or image-based.",
       });
     }
+
+    rejectIfNotResumeText(text);
 
     res.json({
       text,
@@ -584,6 +662,8 @@ router.post("/extract-pdf-text", protect, async (req, res) => {
       });
     }
 
+    rejectIfNotResumeText(extractedText);
+
     console.log(`PDF text extracted via ${extractor || "ml_service"} with ${extractedText.length} characters`);
     res.json({
       text: extractedText,
@@ -596,6 +676,7 @@ router.post("/extract-pdf-text", protect, async (req, res) => {
       error.message?.includes("image-based") ||
       error.message?.includes("text-based PDF") ||
       error.message?.includes("Could not extract text from PDF") ||
+      error.message?.includes("does not look like a resume") ||
       error.message?.includes("No PDF provided") ||
       error.message?.includes("10MB")
         ? 400

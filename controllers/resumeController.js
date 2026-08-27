@@ -81,7 +81,9 @@ export const analyzeManualResume = async (req, res) => {
     };
     const analysisSource = getAnalysisSource(req.body.source);
 
-    const requiredFields = [
+    const requiredFields = analysisSource === 'upload' ? [
+      ['resumeContent', profileData.skills.length > 0 || Boolean(profileData.completedProjects) || Boolean(profileData.desiredJobRoles)],
+    ] : [
       ['skills', profileData.skills.length > 0],
       ['education', Boolean(profileData.education)],
       ['completedProjects', Boolean(profileData.completedProjects)],

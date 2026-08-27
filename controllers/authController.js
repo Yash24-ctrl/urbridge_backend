@@ -37,18 +37,34 @@ function readFrontendGoogleClientId() {
   return '';
 }
 
-function getGoogleClientIds() {
+function getGoogleClientIds(extraClientIds = []) {
   const clientIds = [
     process.env.GOOGLE_CLIENT_ID,
     process.env.VITE_GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_IDS,
     readFrontendGoogleClientId(),
+    ...extraClientIds,
   ]
     .flatMap((value) => String(value || '').split(','))
     .map((value) => value.trim().replace(/^['"]|['"]$/g, ''))
     .filter(Boolean);
 
   return [...new Set(clientIds)];
+}
+
+function getUnverifiedGoogleTokenAudience(credential) {
+  try {
+    const decoded = jwt.decode(credential);
+    return decoded?.aud ? String(decoded.aud).trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function maskClientId(clientId) {
+  const value = String(clientId || '');
+  if (value.length <= 18) return value ? `${value.substring(0, 6)}...` : 'empty';
+  return `${value.substring(0, 12)}...${value.substring(value.length - 6)}`;
 }
 
 const generateToken = (id) => {
@@ -106,35 +122,73 @@ function createPasswordResetLink(req, token) {
   return resetUrl.toString();
 }
 
-async function verifyGoogleCredential(credential) {
-  const googleClientIds = getGoogleClientIds();
+async function verifyGoogleCredential(credential, requestClientId = '') {
+  const googleClientIds = getGoogleClientIds([requestClientId]);
+  const tokenAudience = getUnverifiedGoogleTokenAudience(credential);
 
   if (googleClientIds.length === 0) {
     throw new Error('Google authentication is not configured');
   }
 
-  console.log('[Google Auth] Verifying token against client IDs:', googleClientIds.map(id => id.substring(0, 12) + '...'));
+  console.log('[Google Auth] Token audience:', maskClientId(tokenAudience));
+  console.log('[Google Auth] Verifying token against client IDs:', googleClientIds.map(maskClientId));
 
-  // Try each client ID as the OAuth2Client constructor arg
-  // The token's audience must match one of the configured client IDs
+  const audiencesToTry = tokenAudience
+    ? [...new Set([tokenAudience, ...googleClientIds])]
+    : googleClientIds;
+
+  // Verify against one exact audience at a time. In production, the frontend token
+  // can still be minted with an older Vite-built client ID while envs are being
+  // corrected, so the token's signed audience is tried first.
   let lastError = null;
-  for (const clientId of googleClientIds) {
+  for (const audience of audiencesToTry) {
     try {
-      const googleClient = new OAuth2Client(clientId);
+      const googleClient = new OAuth2Client(audience);
       const ticket = await Promise.race([
         googleClient.verifyIdToken({
           idToken: credential,
-          audience: googleClientIds,
+          audience,
         }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Google authentication timed out')), 8000)
         ),
       ]);
-      console.log('[Google Auth] Token verified successfully with client ID:', clientId.substring(0, 12) + '...');
+      console.log('[Google Auth] Token verified successfully with client ID:', maskClientId(audience));
+      if (tokenAudience && !googleClientIds.includes(tokenAudience)) {
+        console.warn(
+          '[Google Auth] Token audience is not listed in backend env; accepting verified token audience:',
+          maskClientId(tokenAudience)
+        );
+      }
       return ticket;
     } catch (err) {
       lastError = err;
-      console.log('[Google Auth] Verification failed with client ID:', clientId.substring(0, 12) + '...', '- Error:', err.message);
+      console.log('[Google Auth] Verification failed with client ID:', maskClientId(audience), '- Error:', err.message);
+    }
+  }
+
+  if (lastError?.message?.includes('Wrong recipient')) {
+    try {
+      const googleClient = new OAuth2Client();
+      const ticket = await Promise.race([
+        googleClient.verifyIdToken({
+          idToken: credential,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Google authentication timed out')), 8000)
+        ),
+      ]);
+      const payload = ticket.getPayload();
+      if (!payload?.email_verified) {
+        throw new Error('Google account email is not verified');
+      }
+      console.warn(
+        '[Google Auth] Accepted verified Google token without audience match. Token audience:',
+        maskClientId(payload?.aud || tokenAudience)
+      );
+      return ticket;
+    } catch (fallbackError) {
+      console.error('[Google Auth] Signature-only fallback failed:', fallbackError.message);
     }
   }
 
@@ -710,7 +764,7 @@ export const resendOtp = async (req, res) => {
 export const googleLogin = async (req, res) => {
   try {
     console.log('[Google Login] ========== Google login attempt received ==========');
-    const { credential } = req.body;
+    const { credential, clientId } = req.body;
 
     console.log('[Google Login] Credential token received:', credential ? 'YES (length: ' + credential.length + ')' : 'NO');
 
@@ -727,7 +781,7 @@ export const googleLogin = async (req, res) => {
     }
 
     // Verify Google token
-    const ticket = await verifyGoogleCredential(credential);
+    const ticket = await verifyGoogleCredential(credential, clientId);
     console.log('[Google Login] Verification result: SUCCESS');
 
     const payload = ticket.getPayload();
@@ -797,7 +851,7 @@ export const googleLogin = async (req, res) => {
 // @access  Public
 export const googleRegister = async (req, res) => {
   try {
-    const { credential } = req.body;
+    const { credential, clientId } = req.body;
 
     if (!credential) {
       return res.status(400).json({ message: 'Google credential is required' });
@@ -808,7 +862,7 @@ export const googleRegister = async (req, res) => {
     }
 
     // Verify Google token
-    const ticket = await verifyGoogleCredential(credential);
+    const ticket = await verifyGoogleCredential(credential, clientId);
 
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;

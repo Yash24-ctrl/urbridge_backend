@@ -333,14 +333,14 @@ const COMMON_CITY_HINTS = [
 
 const DEFAULT_RESUME_PARSE = {
   yearsOfExperience: "0",
-  educationLevel: "Bachelor's",
+  educationLevel: "",
   customEducation: "",
-  desiredJobRole: "Professional",
-  completedProjects: "N/A",
-  skills: ["Not specified"],
-  certifications: ["N/A"],
+  desiredJobRole: "",
+  completedProjects: "",
+  skills: [],
+  certifications: [],
   currentCity: "",
-  previousJobTitle: "N/A",
+  previousJobTitle: "",
 };
 
 const GROUNDING_STOP_WORDS = new Set([
@@ -420,6 +420,10 @@ function isPlaceholderText(value = "") {
     "not mentioned",
     "none",
     "nil",
+    "professional",
+    "candidate",
+    "resume analysis",
+    "not applicable",
     normalizeKey(DEFAULT_RESUME_PARSE.desiredJobRole),
     normalizeKey(DEFAULT_RESUME_PARSE.previousJobTitle),
     normalizeKey(DEFAULT_RESUME_PARSE.currentCity),
@@ -647,8 +651,8 @@ function extractEducation(text = "", sections = {}) {
   }
 
   return {
-    educationLevel: DEFAULT_RESUME_PARSE.educationLevel,
-    customEducation: DEFAULT_RESUME_PARSE.customEducation,
+    educationLevel: "",
+    customEducation: "",
   };
 }
 
@@ -724,7 +728,7 @@ function extractSkills(text = "", sections = {}) {
 
   if (skillSectionLines.length > 0) {
     const sectionSkills = extractSkillsFromLines(skillSectionLines);
-    return sectionSkills.length > 0 ? sectionSkills : DEFAULT_RESUME_PARSE.skills;
+    return sectionSkills.length > 0 ? sectionSkills : [];
   }
 
   const supportingLines = [
@@ -740,7 +744,7 @@ function extractSkills(text = "", sections = {}) {
   });
 
   const inferredSkills = extractSkillsFromLines(supportingLines);
-  return inferredSkills.length > 0 ? inferredSkills : DEFAULT_RESUME_PARSE.skills;
+  return inferredSkills.length > 0 ? inferredSkills : [];
 }
 
 function cleanupCertification(value = "") {
@@ -787,7 +791,7 @@ function extractCertifications(text = "", sections = {}) {
   }
 
   const uniqueCertifications = uniqueValues(certifications).slice(0, 20);
-  return uniqueCertifications.length > 0 ? uniqueCertifications : DEFAULT_RESUME_PARSE.certifications;
+  return uniqueCertifications.length > 0 ? uniqueCertifications : [];
 }
 
 function cleanupProjectTitle(value = "") {
@@ -854,7 +858,6 @@ function extractProjects(text = "", sections = {}) {
     : splitLines(text).filter((line) => /\b(project|capstone)\b/i.test(line));
 
   const projectNames = [];
-  const fallbackDescriptions = [];
 
   for (const line of lines) {
     if (isLikelyProjectNoise(line) || isProjectDescriptionLine(line)) {
@@ -867,10 +870,8 @@ function extractProjects(text = "", sections = {}) {
       continue;
     }
 
-    const cleaned = cleanupProjectTitle(line);
-    if (cleaned && cleaned.split(/\s+/).length >= 3) {
-      fallbackDescriptions.push(cleaned);
-    }
+    // Ambiguous project-like descriptions are intentionally ignored instead of
+    // being promoted into fake project names.
   }
 
   const uniqueProjects = uniqueValues(projectNames).slice(0, 12);
@@ -878,8 +879,7 @@ function extractProjects(text = "", sections = {}) {
     return uniqueProjects.join(" | ");
   }
 
-  const fallback = uniqueValues(fallbackDescriptions).slice(0, 12).join(" | ");
-  return fallback || DEFAULT_RESUME_PARSE.completedProjects;
+  return "";
 }
 
 function extractCurrentCity(text = "", lines = []) {
@@ -971,11 +971,11 @@ function inferRoleFromSkills(skills = [], previousJobTitle = "", text = "") {
     return titleCase(bestRole);
   }
 
-  if (previousJobTitle && previousJobTitle !== DEFAULT_RESUME_PARSE.previousJobTitle) {
+  if (previousJobTitle) {
     return previousJobTitle;
   }
 
-  return DEFAULT_RESUME_PARSE.desiredJobRole;
+  return "";
 }
 
 function cleanupRoleLabel(value = "") {
@@ -1028,7 +1028,7 @@ function extractDesiredJobRole(text = "", sections = {}, previousJobTitle = "", 
     return previousJobTitle;
   }
 
-  return DEFAULT_RESUME_PARSE.desiredJobRole;
+  return "";
 }
 
 function isGroundedInText(value = "", sourceText = "", minimumRatio = 0.7) {
@@ -1184,11 +1184,11 @@ function chooseBestProjects(primary, secondary) {
     return first;
   }
 
-  if (second) {
+  if (second && second !== DEFAULT_RESUME_PARSE.completedProjects) {
     return second;
   }
 
-  return DEFAULT_RESUME_PARSE.completedProjects;
+  return "";
 }
 
 function normalizeEducationValue(value = "", fallbackCustomEducation = "") {
@@ -1223,8 +1223,8 @@ function normalizeEducationValue(value = "", fallbackCustomEducation = "") {
   }
 
   return {
-    educationLevel: "Bachelor's",
-    customEducation: "",
+    educationLevel: "",
+    customEducation: cleanLine(fallbackCustomEducation),
   };
 }
 
@@ -1328,15 +1328,15 @@ Rules:
 6. "educationLevel" must be exactly one of: "High School", "Diploma", "Bachelor's", "Master's", "PhD".
 7. Map B.Tech, BE, BSc, BCA, BBA, B.Com and similar undergraduate degrees to "Bachelor's".
 8. Map M.Tech, ME, MSc, MBA, MCA, PGDM and similar postgraduate degrees to "Master's".
-9. If education is unclear, default to "Bachelor's".
+9. If education is unclear, return "" for "educationLevel" and "" for "customEducation".
 10. Set "customEducation" to "" unless the resume explicitly contains a useful custom education detail that is not already captured by the allowed values.
-11. "desiredJobRole" must come from the headline or job title near the top of the resume. If that is missing, use the most recent role title.
-12. "completedProjects" must include ALL actual project names or short project headlines joined by " | ". In the Projects section, use only the bold/title line before technologies, dates, links, and bullet descriptions. Do NOT include descriptions, bullets, tech stacks, links, dates, or counts.
+11. "desiredJobRole" must come from the headline or job title near the top of the resume. If that is missing, use the most recent role title. If no role/title is present, return "".
+12. "completedProjects" must include ALL actual project names or short project headlines joined by " | ". In the Projects section, use only the title/headline line before technologies, dates, links, and bullet descriptions. Do NOT include descriptions, bullets, tech stacks, links, dates, or counts. If project names are not clearly present, return "".
 13. "skills" must include EVERY skill explicitly mentioned in the resume, including programming languages, frameworks, databases, cloud tools, platforms, libraries, tools, and soft skills. Do not omit skills that appear in lists, project lines, or experience bullets.
 14. Do NOT guess skills that are not explicitly present in the resume text.
-15. "certifications" must contain the FULL certification names exactly as written in the resume. Do not shorten, normalize, or rewrite them.
+15. "certifications" must contain the FULL certification names exactly as written in the resume. Do not shorten, normalize, or rewrite them. If none are present, return [].
 16. "currentCity" must be the city from the address or location if it is present. If not found, return "".
-17. "previousJobTitle" must be the MOST RECENT job title exactly from the resume. If the only experience is an internship, use the internship role.
+17. "previousJobTitle" must be the MOST RECENT job title exactly from the resume. If the only experience is an internship, use the internship role. If no job title is present, return "".
 18. Never invent project names, certifications, job titles, locations, experience, or roles that are not grounded in the resume text.
 19. Keep array order aligned to the resume where possible.
 
@@ -1349,14 +1349,14 @@ ${extractedText}
 Return JSON in this exact shape:
 {
   "yearsOfExperience": "0",
-  "educationLevel": "Bachelor's",
+  "educationLevel": "",
   "customEducation": "",
-  "desiredJobRole": "Software Engineer",
-  "completedProjects": "Project A | Project B",
-  "skills": ["Python", "SQL", "React", "Communication"],
-  "certifications": ["AWS Certified Cloud Practitioner"],
-  "currentCity": "Mumbai",
-  "previousJobTitle": "Software Engineer Intern"
+  "desiredJobRole": "",
+  "completedProjects": "",
+  "skills": [],
+  "certifications": [],
+  "currentCity": "",
+  "previousJobTitle": ""
 }
 `.trim();
 }
@@ -1408,7 +1408,7 @@ export function normalizeParsedResumeData(rawData = {}, heuristicData = {}, sour
     heuristicDesiredRole,
     previousJobTitle && previousJobTitle !== DEFAULT_RESUME_PARSE.previousJobTitle
       ? previousJobTitle
-      : DEFAULT_RESUME_PARSE.desiredJobRole
+      : ""
   );
 
   const aiProjects = normalizeProjectValues(safeInput.completedProjects)
@@ -1421,19 +1421,18 @@ export function normalizeParsedResumeData(rawData = {}, heuristicData = {}, sour
 
   return {
     yearsOfExperience: normalizedYears,
-    educationLevel: educationFromInput.educationLevel,
+    educationLevel: educationFromInput.educationLevel || "",
     customEducation: educationFromInput.customEducation || "",
-    desiredJobRole: desiredRole || DEFAULT_RESUME_PARSE.desiredJobRole,
+    desiredJobRole: desiredRole || "",
     completedProjects: chooseBestProjects(aiProjects, heuristicProjects),
-    skills: mergedSkills.length > 0 ? mergedSkills : DEFAULT_RESUME_PARSE.skills,
-    certifications:
-      mergedCertifications.length > 0 ? mergedCertifications : DEFAULT_RESUME_PARSE.certifications,
+    skills: mergedSkills.length > 0 ? mergedSkills : [],
+    certifications: mergedCertifications.length > 0 ? mergedCertifications : [],
     currentCity: choosePreferredString(
       aiCity && isGroundedInText(aiCity, groundedSource, 1) ? aiCity : "",
       heuristicCity,
       DEFAULT_RESUME_PARSE.currentCity
     ),
-    previousJobTitle: previousJobTitle || DEFAULT_RESUME_PARSE.previousJobTitle,
+    previousJobTitle: previousJobTitle || "",
   };
 }
 
